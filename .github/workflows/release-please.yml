@@ -44,12 +44,14 @@ jobs:
           # tags would not reliably trigger release-desktop.yml.
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
-      # Enable auto-merge on every release PR the action created or updated,
-      # so a release PR squashes itself into main once status checks settle.
-      # Merging the release PR is what pushes the package tag (e.g.
-      # desktop-v0.2.2) which downstream build workflows are wired to.
-      - name: Auto-merge release PRs
-        if: ${{ steps.release.outputs.prs_created == 'true' || fromJSON(steps.release.outputs.prs || '[]')[0] != null }}
+      # Squash-merge every release PR the action created or updated. Merging
+      # the release PR is what pushes the package tag (e.g. desktop-v0.2.2)
+      # that downstream build workflows are wired to. Release PRs are pure
+      # metadata (package.json + CHANGELOG.md + manifest), so merging without
+      # waiting on advisory checks is safe; main has no required checks. We
+      # do not use --auto because that requires branch protection.
+      - name: Merge release PRs
+        if: ${{ fromJSON(steps.release.outputs.prs || '[]')[0] != null }}
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           PRS: ${{ steps.release.outputs.prs }}
@@ -57,7 +59,6 @@ jobs:
           set -euo pipefail
           echo "$PRS" | jq -c '.[]' | while read -r pr; do
             number=$(echo "$pr" | jq -r '.number')
-            echo "Enabling auto-merge on PR #$number"
-            gh pr merge "$number" --auto --squash --delete-branch || \
-              gh pr merge "$number" --auto --squash
+            echo "Merging release PR #$number"
+            gh pr merge "$number" --squash --delete-branch
           done
