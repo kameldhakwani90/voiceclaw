@@ -60,6 +60,10 @@ export class OpenAIAdapter implements ProviderAdapter {
   // (they have their own summarizeTranscript() path).
   private resumeRecentTurns: HistoryMessage[] = []
   private resumeSummary: string | null = null
+  // Snapshot retained for the tracer so voice-turn traces stay self-contained
+  // even after the consume-once fields above are cleared during setup.
+  private tracedResumeRecentTurns: HistoryMessage[] = []
+  private tracedResumeSummary: string | null = null
 
   constructor(options: OpenAICompatibleAdapterOptions = {}) {
     this.providerName = options.providerName ?? "openai"
@@ -79,6 +83,8 @@ export class OpenAIAdapter implements ProviderAdapter {
     const split = await buildHistorySplit(config.conversationHistory, "openai")
     this.resumeRecentTurns = split.recent
     this.resumeSummary = split.summary
+    this.tracedResumeRecentTurns = [...split.recent]
+    this.tracedResumeSummary = split.summary
     if (split.recent.length > 0 || split.summary) {
       log(`[${this.providerName}] Resume context: recent=${split.recent.length} msgs, summary=${split.summary ? `${split.summary.length} chars` : "none"}`)
     }
@@ -158,6 +164,14 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   getTranscript() {
     return [...this.transcript]
+  }
+
+  getResumePreamble() {
+    return this.tracedResumeSummary ? formatSummaryPreamble(this.tracedResumeSummary) : ""
+  }
+
+  getResumeHistory() {
+    return [...this.tracedResumeRecentTurns]
   }
 
   disconnect() {

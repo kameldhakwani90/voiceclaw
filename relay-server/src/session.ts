@@ -444,6 +444,10 @@ export class RelaySession {
     try {
       this.adapter = createAdapter(config.provider)
       await this.adapter.connect(config, (event) => this.handleRelayEvent(event))
+      const preamble = this.adapter.getResumePreamble?.() ?? ""
+      const resumeHistory = this.adapter.getResumeHistory?.() ?? []
+      this.tracer.setSessionPreamble(preamble || null)
+      this.tracer.setResumeHistory(resumeHistory)
       this.send({ type: "session.ready", sessionId: this.id })
       log(`[session:${this.id}] Session ready`)
     } catch (err) {
