@@ -54,12 +54,8 @@ export class GeminiAdapter implements ProviderAdapter {
   private userSpeaking = false
   private hasVideoInput = false
   private watchdogEnabled = false
-  // Post-resume liveness tracking. After a resumed setupComplete we wait for
-  // ASR-side activity (inputTranscription) before arming the generation
-  // watchdog. The poisoned signature is "ASR alive, generation dead", so
-  // arming on idle resume would false-positive on healthy quiet sessions
-  // where the user simply isn't speaking. Any generation-side event clears
-  // both flags.
+  // Watchdog arms only after the first post-resume ASR text; any generation
+  // event clears it.
   private postResumeTimer: ReturnType<typeof setTimeout> | null = null
   private awaitingResumeGeneration = false
   private awaitingResumeFirstInput = false
@@ -599,9 +595,6 @@ export class GeminiAdapter implements ProviderAdapter {
       // Every input-transcription delta refreshes our proxy for end-of-speech
       // — the LAST one before modelTurn is our best non-explicit signal.
       this.lastInputTranscriptionAtMs = Date.now()
-      // First post-resume ASR activity is our cue to start watching for
-      // the matching generation. Until ASR fires, an "idle" resumed session
-      // is healthy and must not be flagged as poisoned.
       if (this.awaitingResumeFirstInput) {
         this.awaitingResumeFirstInput = false
         this.armPostResumeWatchdog()

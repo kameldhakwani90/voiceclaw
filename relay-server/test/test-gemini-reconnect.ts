@@ -1091,21 +1091,15 @@ async function runIdleResumeNoFalsePoisonTest() {
     receivedSetups,
     onConnect: (ws, index) => {
       if (index === 0) {
-        // Original session: emit a handle, then a goAway. Conversation is idle —
-        // no inputTranscription, no modelTurn. Mirrors a session whose user
-        // finished talking minutes ago and is just sitting on the call.
         setTimeout(() => ws.send(JSON.stringify({
           sessionResumptionUpdate: { newHandle: "idle-handle", resumable: true },
         })), 20)
         setTimeout(() => ws.send(JSON.stringify({ goAway: { timeLeft: "2s" } })), 40)
         setTimeout(() => ws.close(1011, "rotating"), 80)
       } else if (index === 1) {
-        // Resumed session: emit a handle but stay quiet — no user input
-        // means no inputTranscription, no modelTurn. Healthy idle session.
         setTimeout(() => ws.send(JSON.stringify({
           sessionResumptionUpdate: { newHandle: "idle-handle-2", resumable: true },
         })), 20)
-        // Stay open. Adapter must NOT classify this as a poisoned handle.
       }
     },
   }, MOCK_PORT)
@@ -1124,15 +1118,10 @@ async function runIdleResumeNoFalsePoisonTest() {
   type AdapterInternals = { wsUrlOverride: string, postResumeTimeoutMs: number }
   const internals = adapter as unknown as AdapterInternals
   internals.wsUrlOverride = `ws://localhost:${MOCK_PORT}`
-  // Compress the post-resume window so the test runs quickly. The poisoned
-  // signature only matters when ASR-side activity arrived without generation;
-  // in this test no ASR activity arrives at all, so the watchdog must not fire
-  // regardless of timeout length.
   internals.postResumeTimeoutMs = 200
 
   await adapter.connect(config, (event) => clientEvents.push(event as RelayEvent))
 
-  // Wait through original goAway (~80ms) + reconnect + 4× postResumeTimeout window
   await new Promise((r) => setTimeout(r, 1500))
 
   console.log(`    Setups: ${receivedSetups.length}, events: ${clientEvents.map((e) => e.type).join(", ")}`)
@@ -1172,13 +1161,9 @@ async function runResumeWithUserSilentThenSpeakingTest() {
         setTimeout(() => ws.send(JSON.stringify({
           sessionResumptionUpdate: { newHandle: "h2", resumable: true },
         })), 20)
-        // Simulate the documented poisoned-handle signature: ASR comes back
-        // (inputTranscription deltas flow) but generation never fires.
         setTimeout(() => ws.send(JSON.stringify({
           serverContent: { inputTranscription: { text: "hello" } },
         })), 50)
-      } else {
-        // Third connection (post-poison fresh session): just stay open
       }
     },
   }, MOCK_PORT)
