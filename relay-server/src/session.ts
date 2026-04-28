@@ -105,6 +105,17 @@ export class RelaySession {
         // Fall through — also forward to client so it can update UI
         // (drop the "Let me check on that..." prefix, clear spinners, etc.)
         break
+      case "session.rotated":
+        // Adapter just rebuilt the upstream with a fresh resume context
+        // (rotation summary). Re-pull so post-rotation traces don't echo
+        // the original pre-rotation preamble/history.
+        if (this.adapter) {
+          const preamble = this.adapter.getResumePreamble?.() ?? ""
+          const resumeHistory = this.adapter.getResumeHistory?.() ?? []
+          this.tracer.setSessionPreamble(preamble || null)
+          this.tracer.setResumeHistory(resumeHistory)
+        }
+        break
     }
 
     // Intercept tool calls — handle server-side tools, forward the rest to client

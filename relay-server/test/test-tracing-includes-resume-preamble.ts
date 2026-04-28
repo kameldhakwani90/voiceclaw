@@ -82,7 +82,10 @@ async function runGeminiPreambleWiringTest() {
   })
 
   try {
-    const longHistory = Array.from({ length: 20 }, (_, i) => ({
+    // Sized at exactly RECENT_TURNS_VERBATIM * 2 so buildHistorySplit returns
+    // all turns verbatim and skips summarize() — that path makes a real fetch
+    // to Gemini/OpenAI which we don't want to hit from this test.
+    const longHistory = Array.from({ length: 16 }, (_, i) => ({
       role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
       text: `turn ${i}`,
     }))
@@ -102,7 +105,7 @@ async function runGeminiPreambleWiringTest() {
 
     const preamble = adapter.getResumePreamble?.() ?? ""
     assert(preamble.length > 0, "Gemini adapter exposes a non-empty resume preamble")
-    assert(preamble.includes("turn 19"), "preamble includes the most recent turn verbatim")
+    assert(preamble.includes("turn 15"), "preamble includes the most recent turn verbatim")
 
     const tracer = new TurnTracer()
     tracer.startSession("session-1", "user-1", "gemini-test", "BASE_INSTRUCTIONS")
@@ -117,7 +120,7 @@ async function runGeminiPreambleWiringTest() {
     )
     assert(composed[0].role === "system", "composed[0] is system")
     assert(composed[0].content.startsWith("BASE_INSTRUCTIONS"), "system starts with base instructions")
-    assert(composed[0].content.includes("turn 19"), "system includes recent-turn verbatim from preamble")
+    assert(composed[0].content.includes("turn 15"), "system includes recent-turn verbatim from preamble")
     assert(composed[composed.length - 1].role === "user", "last message is current user turn")
     assert(composed[composed.length - 1].content === "current user utterance", "last message content matches")
 
