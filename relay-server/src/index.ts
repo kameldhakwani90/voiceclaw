@@ -11,6 +11,9 @@ import { WebSocketServer } from "ws"
 import { RelaySession } from "./session.js"
 import { getTestPageHTML } from "./test-page.js"
 import { log, warn } from "./log.js"
+import { gracefulShutdown } from "./shutdown.js"
+
+const SHUTDOWN_TIMEOUT_MS = 10_000
 
 const PORT = parseInt(process.env.PORT ?? "8080", 10)
 
@@ -38,11 +41,12 @@ wss.on("connection", (ws) => {
   new RelaySession(ws)
 })
 
+let shuttingDown = false
+
 async function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
   log("Shutting down...")
-  // Force exit if graceful shutdown hangs
-  const forceExit = setTimeout(() => process.exit(1), 3000)
-  forceExit.unref()
 
   // Close client sockets first so each RelaySession runs its cleanup()
   // (endSession → adapter disconnect → transcript sync) before we tear
@@ -50,6 +54,9 @@ async function shutdown() {
   wss.clients.forEach((ws) => ws.close())
   wss.close()
   await new Promise<void>((resolve) => server.close(() => resolve()))
+
+  await gracefulShutdown(SHUTDOWN_TIMEOUT_MS)
+
   // Drain pending spans before exiting — otherwise the last turn of every
   // active session gets dropped on SIGTERM.
   await shutdownLangfuse()

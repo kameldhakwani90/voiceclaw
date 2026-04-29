@@ -17,6 +17,7 @@ import { buildInstructions } from "./instructions.js"
 import { log, error as logError } from "./log.js"
 import { TurnTracer } from "./tracing/turn-tracer.js"
 import { MediaCapture } from "./media/capture.js"
+import { trackBackgroundTask } from "./shutdown.js"
 const SERVER_SIDE_TOOLS = new Set(["echo_tool", "ask_brain", "web_search"])
 
 export class RelaySession {
@@ -569,13 +570,12 @@ export class RelaySession {
       input: prompt,
     })
 
-    // Fire-and-forget with bounded retries — gateway may be busy with the
-    // tail of an ask_brain call that hadn't finished when the session ended.
-    void context.with(bg.ctx, () =>
+    const syncPromise = context.with(bg.ctx, () =>
       retryTranscriptSync({ prompt, gatewayUrl, authToken, sessionKey, sessionId })
         .then((result) => bg.end({ output: result }))
         .catch((err) => bg.end({ error: err instanceof Error ? err.message : String(err) })),
     )
+    trackBackgroundTask(syncPromise, `transcript-sync:${sessionId}`)
   }
 }
 
