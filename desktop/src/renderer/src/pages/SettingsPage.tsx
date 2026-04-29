@@ -42,7 +42,8 @@ export function SettingsPage() {
   const { theme, setTheme } = useTheme()
 
   // Connection
-  const [serverUrl, setServerUrl] = useState('ws://localhost:8080/ws')
+  const [serverUrl, setServerUrl] = useState('')
+  const [serverUrlPlaceholder, setServerUrlPlaceholder] = useState('ws://localhost:8080/ws')
   const [apiKey, setApiKey] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle')
@@ -84,6 +85,15 @@ export function SettingsPage() {
     ;(async () => {
       const url = await getSetting('realtime_server_url')
       if (url) setServerUrl(url)
+      try {
+        const ports = await window.electronAPI?.app?.getServicePorts?.()
+        const port = ports?.relay
+        if (typeof port === 'number' && port > 0) {
+          setServerUrlPlaceholder(`ws://127.0.0.1:${port}/ws`)
+        }
+      } catch {
+        // Keep the static fallback placeholder.
+      }
       const key = await getSetting('realtime_api_key')
       if (key) setApiKey(key)
       const tk = await getSetting('tavily_api_key')
@@ -270,7 +280,7 @@ export function SettingsPage() {
             <Input
               value={serverUrl}
               onChange={(e) => updateServerUrl(e.target.value)}
-              placeholder="ws://localhost:8080/ws"
+              placeholder={serverUrlPlaceholder}
             />
           </div>
 

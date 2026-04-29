@@ -4,12 +4,10 @@ import { join } from 'path'
 import { allocatePort } from '../ports'
 import { serviceManager } from './service-manager'
 
-// Bundled OpenClaw gateway spawn. The actual signed binary ships under
-// Resources/bin/openclaw-gateway after PR #0 (yagudaev/openclaw release
-// pipeline) lands. For now this module locates the binary (if present)
-// and wires it into the service manager. If the binary is missing, we
-// log and skip — the user can still point at an external endpoint via
-// the Brain step of the wizard.
+// Bundled OpenClaw gateway spawn. The signed binary ships under
+// Resources/bin/openclaw-gateway when the openclaw release pipeline is
+// set up; missing in dev today, in which case the user can point at an
+// external endpoint via the Brain step of the wizard.
 
 export async function startBundledOpenClaw(): Promise<void> {
   const binaryPath = resolveBundledBinary()
@@ -26,8 +24,7 @@ export async function startBundledOpenClaw(): Promise<void> {
     args: ['gateway', '--port', String(port)],
     env: {
       // OpenClaw respects the prod config dir by default; we don't pass
-      // OPENCLAW_SKIP_CHANNELS here (would disable telegram per
-      // project_openclaw_fork_runtime.md).
+      // OPENCLAW_SKIP_CHANNELS here (would disable telegram channels).
     },
     port,
     healthCheckUrl: `http://127.0.0.1:${port}/health`,

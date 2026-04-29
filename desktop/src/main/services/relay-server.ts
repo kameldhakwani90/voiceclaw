@@ -2,14 +2,12 @@ import { app } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { allocatePort } from '../ports'
+import { getProviderKey, type ProviderId } from '../provider-keys'
 import { serviceManager } from './service-manager'
 
-// Bundled relay-server spawn. The signed binary ships under
-// Resources/bin/relay-server-darwin-<arch> via the dist:mac pipeline
-// (yarn workspace relay-server build:bin runs before electron-builder).
-// In dev the binary is absent; the root `yarn dev` orchestrator already
-// runs the relay via tsx, so this module no-ops and the renderer keeps
-// talking to ws://localhost:8080/ws.
+// Packaged builds find the binary under process.resourcesPath; dev
+// builds (where __dirname is out/main/) walk up to desktop/resources/.
+// Without the binary present we no-op so `yarn dev` keeps working.
 
 export async function startBundledRelayServer(): Promise<void> {
   const binaryPath = resolveBundledBinary()
@@ -24,7 +22,7 @@ export async function startBundledRelayServer(): Promise<void> {
     name: 'relay',
     command: binaryPath,
     args: [],
-    env: forwardedEnv(),
+    env: buildRelayEnv(),
     port,
     healthCheckUrl: `http://127.0.0.1:${port}/health`,
     logFile: 'relay-server.log',
@@ -36,9 +34,6 @@ export async function startBundledRelayServer(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const FORWARDED_KEYS = [
-  'GEMINI_API_KEY',
-  'OPENAI_API_KEY',
-  'XAI_API_KEY',
   'TAVILY_API_KEY',
   'BRAIN_GATEWAY_URL',
   'RELAY_API_KEY',
@@ -46,7 +41,15 @@ const FORWARDED_KEYS = [
   'LANGFUSE_SECRET_KEY',
   'LANGFUSE_BASE_URL',
   'TRACING_UI_COLLECTOR_URL',
+  'GIT_SHA',
+  'RELAY_VERSION',
 ] as const
+
+const PROVIDER_ENV_KEYS: Record<ProviderId, string> = {
+  gemini: 'GEMINI_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  xai: 'XAI_API_KEY',
+}
 
 function forwardedEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
@@ -54,6 +57,20 @@ function forwardedEnv(): NodeJS.ProcessEnv {
     const value = process.env[key]
     if (value !== undefined) env[key] = value
   }
+  return env
+}
+
+function buildRelayEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = forwardedEnv()
+  for (const provider of Object.keys(PROVIDER_ENV_KEYS) as ProviderId[]) {
+    const envKey = PROVIDER_ENV_KEYS[provider]
+    if (env[envKey]) continue
+    const stored = getProviderKey(provider)
+    if (stored) env[envKey] = stored
+  }
+  // Tavily is stored in the renderer-side settings KV today, not the
+  // provider-keys vault, so the relay reads it from process.env via the
+  // forwarded passthrough above when the user has exported it.
   return env
 }
 
