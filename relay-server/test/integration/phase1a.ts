@@ -1,5 +1,5 @@
 // Phase 1a test script — verifies auth + echo loopback
-// Run: npx tsx test/test-phase1a.ts
+// Run: npx tsx test/integration/phase1a.ts
 // Requires: relay server running on ws://localhost:8080/ws
 // Spins up a mock brain agent gateway for auth testing
 
