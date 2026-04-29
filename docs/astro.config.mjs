@@ -121,6 +121,7 @@ export default defineConfig({
           label: 'Operations',
           items: [
             { slug: 'operations/telemetry', label: 'Telemetry (PostHog)' },
+            { slug: 'operations/brain-empty-response', label: 'Brain returns empty / no answer' },
           ],
         },
       ],
