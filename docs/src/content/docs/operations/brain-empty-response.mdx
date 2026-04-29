@@ -1,0 +1,56 @@
+---
+title: Brain returns empty / no answer
+description: What to do when VoiceClaw says "Empty response from brain agent" or Kira keeps falling silent on tool calls.
+---
+
+If VoiceClaw reports `Empty response from brain agent` (or Kira goes quiet
+right after saying "let me check on that…"), the OpenClaw gateway most
+likely received a failed or empty response from its current model backend.
+
+The fastest fix is to **switch OpenClaw's primary model away from
+`claude-cli` to a working provider**. The `claude` desktop CLI is sometimes
+restricted by Anthropic when used as an automation backend, and OpenClaw
+itself recommends an HTTP-API provider for production.
+
+## Fix
+
+Edit `~/.openclaw/openclaw.json` and change `agents.defaults.model.primary`
+from `claude-cli/...` to a known-working provider, e.g.
+`openai-codex/gpt-5.4`:
+
+```json
+"model": {
+  "primary": "openai-codex/gpt-5.4",
+  "fallbacks": [
+    "claude-cli/claude-haiku-4-5"
+  ]
+}
+```
+
+Then restart the gateway so it picks up the new config:
+
+```sh
+kill $(pgrep -f openclaw-gateway)
+```
+
+`launchd` will respawn it automatically. Confirm the swap took effect:
+
+```sh
+tail -f ~/.openclaw/logs/gateway.log
+# Look for: [gateway] agent model: openai-codex/gpt-5.4
+```
+
+Trigger a voice call and verify the brain answers.
+
+## Why not just fix `claude-cli`?
+
+You can — `claude login` from your terminal, then restart the gateway —
+but if the failure is an Anthropic-side block on automation use, no amount
+of re-auth will fix it. Switching providers is the durable answer.
+
+## Why does the error say so little?
+
+OpenClaw's gateway captures the CLI subprocess's `stderr` but doesn't
+include it in the failure response, so the actual reason (auth, block,
+rate-limit, missing binary, network) doesn't reach the relay log. Until
+that changes upstream, provider switching is the fastest workaround.
