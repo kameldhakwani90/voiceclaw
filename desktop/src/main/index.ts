@@ -25,6 +25,7 @@ import {
 } from './call-bar'
 import { serviceManager } from './services/service-manager'
 import { startBundledOpenClaw } from './services/openclaw-gateway'
+import { startBundledRelayServer } from './services/relay-server'
 import { ensureDefault as ensureLaunchAtLoginDefault } from './login-items'
 import { initAutoUpdater } from './updater'
 import { ensureOnboardingSchema, resetOnboarding } from './onboarding'
@@ -161,6 +162,11 @@ app.whenReady().then(async () => {
   startBundledOpenClaw().catch((err) => {
     console.warn('[openclaw] failed to start', err)
     captureException(err, { source: 'startBundledOpenClaw' })
+  })
+
+  startBundledRelayServer().catch((err) => {
+    console.warn('[relay] failed to start', err)
+    captureException(err, { source: 'startBundledRelayServer' })
   })
 
   // Check for app updates. No-op in dev or when disabled.

@@ -19,6 +19,12 @@ extraResources:
     to: "."
     filter:
       - "**/*"
+  # Bundled relay-server binary. Built by `yarn workspace relay-server
+  # build:bin` before electron-builder runs (see `dist:mac` in
+  # desktop/package.json). v1 ships arm64 only; x64 follow-up tracked
+  # under NAN-681.
+  - from: "../relay-server/dist/bin/relay-server-darwin-arm64"
+    to: "bin/relay-server-darwin-arm64"
 
 # Ship a universal DMG so one download covers both Apple Silicon and
 # Intel Macs. Slightly larger file in exchange for zero "which one do I
