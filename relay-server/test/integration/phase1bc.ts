@@ -1,5 +1,5 @@
 // Phase 1b+1c test — verifies OpenAI Realtime adapter + tool router
-// Run: OPENAI_API_KEY=sk-... npx tsx test/test-phase1bc.ts
+// Run: OPENAI_API_KEY=sk-... npx tsx test/integration/phase1bc.ts
 // Requires: relay server running on ws://localhost:8080/ws with OPENAI_API_KEY set
 
 import { createServer, type Server } from "node:http"

@@ -1,6 +1,6 @@
 // End-to-end Gemini integration test through the relay server
 // Verifies the full wire protocol: setup → session.ready → audio → responses
-// Run: npx tsx test/test-gemini-e2e.ts
+// Run: npx tsx test/integration/gemini-e2e.ts
 
 import WebSocket from "ws"
 import { readFileSync, existsSync } from "node:fs"
