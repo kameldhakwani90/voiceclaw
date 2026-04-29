@@ -1,11 +1,12 @@
 ---
 title: Brain returns empty / no answer
-description: What to do when VoiceClaw says "Empty response from brain agent" or Kira keeps falling silent on tool calls.
+description: What to do when VoiceClaw says "Empty response from brain agent" or your agent keeps falling silent on tool calls.
 ---
 
-If VoiceClaw reports `Empty response from brain agent` (or Kira goes quiet
-right after saying "let me check on that…"), the OpenClaw gateway most
-likely received a failed or empty response from its current model backend.
+If VoiceClaw reports `Empty response from brain agent` (or your agent goes
+quiet right after saying "let me check on that…"), the OpenClaw gateway
+most likely received a failed or empty response from its current model
+backend.
 
 The fastest fix is to **switch OpenClaw's primary model away from
 `claude-cli` to a working provider**. The `claude` desktop CLI is sometimes
