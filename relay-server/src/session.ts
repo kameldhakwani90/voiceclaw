@@ -296,15 +296,24 @@ export class RelaySession {
     // context.active(), which could be whatever ambient (unrelated) span
     // happens to be live at this moment and would produce a misleading trace.
     const brainCtx = this.tracer.getToolSpanContext(callId) ?? ROOT_CONTEXT
+    let streamedAnyPartial = false
+    const onPartial = this.adapter?.injectPartial
+      ? (chunk: string) => {
+          streamedAnyPartial = true
+          this.adapter?.injectPartial?.(
+            `[Brain agent partial answer for "${query}"] ${chunk}`,
+          )
+        }
+      : undefined
     const runAskBrain = () => askBrain(query, {
       gatewayUrl,
       authToken,
       sessionId: sessionKey,
-    }, sendToClient, callId, controller.signal)
+    }, sendToClient, callId, controller.signal, onPartial)
 
     context.with(brainCtx, runAskBrain).then((result) => {
       const brainMs = Date.now() - brainStart
-      log(`[session:${this.id}] ask_brain completed in ${brainMs}ms`)
+      log(`[session:${this.id}] ask_brain completed in ${brainMs}ms (streamed=${streamedAnyPartial})`)
 
       if (controller.signal.aborted) {
         log(`[session:${this.id}] ask_brain (${callId}) was cancelled — discarding result`)
@@ -314,10 +323,19 @@ export class RelaySession {
 
       this.tracer.endToolCall(callId, result)
 
-      // Inject the result back into the conversation so Gemini speaks it
-      this.adapter?.injectContext(
-        `[Brain agent result for query: "${query}"]\n${result}\n\nPlease share this information with the user naturally.`
-      )
+      // When chunks were streamed via injectPartial the model already has the
+      // body — re-injecting the full result would duplicate it. Send a short
+      // completion marker instead. When nothing was streamed (short reply or
+      // adapter without partial support), fall back to the original full inject.
+      if (streamedAnyPartial) {
+        this.adapter?.injectContext(
+          `[Brain agent answer complete for "${query}"]\nShare what you have with the user naturally.`,
+        )
+      } else {
+        this.adapter?.injectContext(
+          `[Brain agent result for query: "${query}"]\n${result}\n\nPlease share this information with the user naturally.`,
+        )
+      }
     }).catch((err) => {
       const message = err instanceof Error ? err.message : "brain agent call failed"
       logError(`[session:${this.id}] ask_brain error:`, message)

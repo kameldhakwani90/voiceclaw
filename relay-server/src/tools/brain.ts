@@ -11,12 +11,23 @@ interface BrainConfig {
   sessionId: string
 }
 
+export type PartialFlush = (chunk: string) => void
+
+// Heuristics for streaming brain SSE deltas back into the model context.
+// The provider call can take 5–20 s end-to-end; streaming partial chunks lets
+// the assistant start speaking from a forming answer instead of waiting for
+// the full reply, while the boundary checks keep us from injecting mid-word
+// fragments that would read as garbage.
+export const PARTIAL_FLUSH_MIN_CHARS = 200
+export const PARTIAL_FLUSH_BOUNDARY_RE = /([.!?])\s$|\n\n$/
+
 export async function askBrain(
   query: string,
   config: BrainConfig,
   sendToClient: SendToClient,
   callId: string,
   externalSignal?: AbortSignal,
+  onPartial?: PartialFlush,
 ): Promise<string> {
   const url = `${config.gatewayUrl.replace(/\/$/, "")}/v1/chat/completions`
 
@@ -98,6 +109,21 @@ export async function askBrain(
   const decoder = new TextDecoder()
   let fullResponse = ""
   let buffer = ""
+  let pendingDelta = ""
+  let partialFlushCount = 0
+
+  const flushPartial = () => {
+    if (!onPartial || !pendingDelta) return
+    const chunk = pendingDelta
+    pendingDelta = ""
+    partialFlushCount++
+    log(`[brain] Streaming partial chunk #${partialFlushCount} (${chunk.length} chars) to model`)
+    try {
+      onPartial(chunk)
+    } catch (err) {
+      logError(`[brain] onPartial threw — continuing without further partials:`, err)
+    }
+  }
 
   let readCount = 0
   while (true) {
@@ -144,8 +170,17 @@ export async function askBrain(
 
         // Standard OpenAI-compatible SSE chunk
         const delta = parsed.choices?.[0]?.delta?.content
-        if (delta) {
+        if (typeof delta === "string" && delta.length > 0) {
           fullResponse += delta
+          if (onPartial) {
+            pendingDelta += delta
+            if (
+              PARTIAL_FLUSH_BOUNDARY_RE.test(pendingDelta) ||
+              pendingDelta.length >= PARTIAL_FLUSH_MIN_CHARS
+            ) {
+              flushPartial()
+            }
+          }
         }
       } catch {
         // Skip unparseable chunks
@@ -154,6 +189,11 @@ export async function askBrain(
   }
 
   cleanup()
-  log(`[brain] Response: ${fullResponse.substring(0, 100)}...`)
+  // Only flush the leftover when we already emitted at least one mid-stream
+  // chunk. For short answers that never crossed a boundary, the caller's
+  // final injectContext handles delivery — flushing the leftover too would
+  // duplicate the entire response into the model's context.
+  if (pendingDelta && partialFlushCount > 0) flushPartial()
+  log(`[brain] Response: ${fullResponse.substring(0, 100)}... (partial flushes: ${partialFlushCount})`)
   return fullResponse || JSON.stringify({ error: "Empty response from brain agent" })
 }

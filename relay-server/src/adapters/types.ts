@@ -31,6 +31,16 @@ export interface ProviderAdapter {
   /** Inject context into the conversation (e.g. async tool results) */
   injectContext(text: string): void
 
+  /**
+   * Append partial context mid-response without forcing a new response cycle.
+   * Used to stream brain SSE deltas into the model's working context as they
+   * arrive, so the assistant can start speaking from the answer before the
+   * full brain reply has assembled. Optional — adapters that can't safely
+   * append without restarting generation can leave it unimplemented and the
+   * caller will fall back to buffering until the final injectContext.
+   */
+  injectPartial?(text: string): void
+
   /** Get the conversation transcript so far */
   getTranscript(): { role: "user" | "assistant", text: string }[]
 

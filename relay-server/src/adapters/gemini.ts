@@ -384,6 +384,18 @@ export class GeminiAdapter implements ProviderAdapter {
     })
   }
 
+  injectPartial(text: string) {
+    // realtimeInput.text is append-only and never starts a new generation
+    // turn on its own, so partial chunks can land mid-response and the model
+    // sees them as more input becomes available.
+    log(`[gemini] Injecting partial context via realtimeInput.text (${text.length} chars)`)
+    this.sendUpstream({
+      realtimeInput: {
+        text,
+      },
+    })
+  }
+
   getTranscript() {
     return [...this.transcript]
   }

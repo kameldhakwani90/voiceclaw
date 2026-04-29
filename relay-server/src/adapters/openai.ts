@@ -118,6 +118,23 @@ export class OpenAIAdapter implements ProviderAdapter {
     this.requestResponse("injectContext")
   }
 
+  injectPartial(text: string) {
+    // Append the chunk as a conversation item without triggering response.create.
+    // The current model turn is already in flight (the assistant started speaking
+    // after the placeholder tool result), so the new item lands as additional
+    // context the model reads from on its next reasoning step. Requesting a
+    // response here would race the active one.
+    log(`[${this.providerName}] Injecting partial context via conversation.item.create (${text.length} chars)`)
+    this.sendUpstream({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text }],
+      },
+    })
+  }
+
   commitAudio() {
     this.sendUpstream({ type: "input_audio_buffer.commit" })
   }
