@@ -38,11 +38,15 @@ describe("session tool-call blocking dispatch", () => {
     }
     delete process.env.BRAIN_GATEWAY_URL
     delete process.env.OPENCLAW_GATEWAY_URL
+    delete process.env.TAVILY_ENDPOINT
+    delete process.env.TAVILY_API_KEY
   })
 
   afterAll(() => {
     delete process.env.BRAIN_GATEWAY_URL
     delete process.env.OPENCLAW_GATEWAY_URL
+    delete process.env.TAVILY_ENDPOINT
+    delete process.env.TAVILY_API_KEY
   })
 
   it("blocking tool: synchronous result sent via sendToolResult, no placeholder, no injectContext", async () => {
@@ -98,7 +102,7 @@ describe("session tool-call blocking dispatch", () => {
     expect(calls.injectContext[0]).toContain("the answer")
   })
 
-  it("adapter without blocking capability: blocking tool still routes through sendToolResult", async () => {
+  it("adapter without blocking capability: blocking tool falls through to placeholder + injectContext", async () => {
     httpServer = await mountTavilyMock({
       answer: "fallback works",
       results: [{ title: "x", url: "https://x", content: "y" }],
@@ -119,8 +123,11 @@ describe("session tool-call blocking dispatch", () => {
     await invokeServerToolCall(session, "call-fallback-1", "web_search", { query: "anything" })
 
     expect(calls.sendToolResult).toHaveLength(1)
-    expect(calls.sendToolResult[0].output).toContain("fallback works")
-    expect(calls.injectContext).toHaveLength(0)
+    const placeholder = JSON.parse(calls.sendToolResult[0].output) as { status?: string }
+    expect(placeholder.status).toBe("searching")
+
+    expect(calls.injectContext).toHaveLength(1)
+    expect(calls.injectContext[0]).toContain("fallback works")
   })
 
   it("web_search is registered as blocking", () => {
@@ -135,6 +142,69 @@ describe("session tool-call blocking dispatch", () => {
     const tool = findRelayTool(config, "ask_brain")
     expect(tool).not.toBeNull()
     expect(tool?.blocking).toBe(false)
+  })
+
+  it("blocking ask_brain (config-driven override): abort sends cancellation result", async () => {
+    httpServer = await mountStallingMock()
+    process.env.BRAIN_GATEWAY_URL = `http://127.0.0.1:${httpServer.port}`
+
+    const calls: CapturedAdapterCalls = { sendToolResult: [], injectContext: [] }
+    const ws = makeFakeWs(() => {})
+    const session = new RelaySession(ws as unknown as never)
+
+    const adapter = makeFakeAdapter({ blockingToolResponse: true }, calls)
+    attachConfigAndAdapter(session, adapter, {})
+
+    const inner = session as unknown as {
+      runBlockingAskBrain: (callId: string, args: string) => void
+      inFlightTools: Map<string, AbortController>
+    }
+    inner.runBlockingAskBrain("call-abort-brain", JSON.stringify({ query: "stalled question" }))
+
+    await waitMs(50)
+    const controller = inner.inFlightTools.get("call-abort-brain")
+    expect(controller).toBeDefined()
+    controller!.abort(new Error("upstream cancelled tool call"))
+
+    await waitForCallToComplete(inner.inFlightTools, "call-abort-brain")
+
+    const cancelled = calls.sendToolResult.find((c) => c.callId === "call-abort-brain")
+    expect(cancelled).toBeDefined()
+    const payload = JSON.parse(cancelled!.output) as { status?: string }
+    expect(payload.status).toBe("cancelled")
+  })
+
+  it("runWebSearch abort: cancellation result sent", async () => {
+    httpServer = await mountStallingMock()
+
+    const calls: CapturedAdapterCalls = { sendToolResult: [], injectContext: [] }
+    const ws = makeFakeWs(() => {})
+    const session = new RelaySession(ws as unknown as never)
+
+    const adapter = makeFakeAdapter({ blockingToolResponse: true }, calls)
+    attachConfigAndAdapter(session, adapter, {
+      tavilyApiKey: "tvly-test",
+      tavilyEndpoint: `http://127.0.0.1:${httpServer.port}/search`,
+    })
+    process.env.TAVILY_API_KEY = "tvly-test"
+
+    const inner = session as unknown as {
+      runWebSearch: (callId: string, args: string) => void
+      inFlightTools: Map<string, AbortController>
+    }
+    inner.runWebSearch("call-abort-web", JSON.stringify({ query: "stalled query" }))
+
+    await waitMs(50)
+    const controller = inner.inFlightTools.get("call-abort-web")
+    expect(controller).toBeDefined()
+    controller!.abort(new Error("upstream cancelled tool call"))
+
+    await waitForCallToComplete(inner.inFlightTools, "call-abort-web")
+
+    const cancelled = calls.sendToolResult.find((c) => c.callId === "call-abort-web")
+    expect(cancelled).toBeDefined()
+    const payload = JSON.parse(cancelled!.output) as { status?: string }
+    expect(payload.status).toBe("cancelled")
   })
 })
 
@@ -239,6 +309,28 @@ async function mountTavilyMock(payload: {
   return {
     port,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  }
+}
+
+async function mountStallingMock(): Promise<MockServerHandle> {
+  const sockets = new Set<import("node:net").Socket>()
+  const server: Server = createServer((_req, _res) => {
+    // Never respond — keeps the request hanging until the client aborts or the
+    // server closes. Lets tests reach into inFlightTools and trigger an abort
+    // while the fetch is genuinely in-flight.
+  })
+  server.on("connection", (socket) => {
+    sockets.add(socket)
+    socket.on("close", () => sockets.delete(socket))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const port = (server.address() as AddressInfo).port
+  return {
+    port,
+    close: () => new Promise<void>((resolve) => {
+      for (const socket of sockets) socket.destroy()
+      server.close(() => resolve())
+    }),
   }
 }
 
