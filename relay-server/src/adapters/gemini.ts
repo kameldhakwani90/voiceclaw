@@ -250,6 +250,16 @@ export class GeminiAdapter implements ProviderAdapter {
     this.currentlyResumable = false
     this.rotateAfterToolCalls = false
 
+    // Finalize any in-flight transcription before rotating. Gemini's resumed
+    // session replays transcription from its last checkpoint, so if we leave
+    // currentAssistantText / currentUserText populated, the replayed deltas
+    // concatenate onto stale text and the UI renders "How's that?How's that?".
+    // Flush as transcript.done so the client commits its current bubble; post-
+    // resume deltas then start a fresh bubble. Done before the forced-fresh
+    // preamble snapshot so a mid-turn user utterance lands in this.transcript
+    // and gets folded into the rebuilt systemInstruction.
+    this.flushPendingTranscripts()
+
     // Forced-fresh has no resumption handle, so Gemini won't replay any
     // in-call state. Rebuild the systemInstruction preamble from the original
     // conversationHistory PLUS in-call turns accumulated since connect() so
@@ -263,13 +273,6 @@ export class GeminiAdapter implements ProviderAdapter {
     }
     const handlePreview = this.resumptionHandle ? `${this.resumptionHandle.slice(0, 8)}…` : "fresh"
     log(`[gemini] Reconnecting (${reason}, handle=${handlePreview})`)
-    // Finalize any in-flight transcription before rotating. Gemini's resumed
-    // session replays transcription from its last checkpoint, so if we leave
-    // currentAssistantText / currentUserText populated, the replayed deltas
-    // concatenate onto stale text and the UI renders "How's that?How's that?".
-    // Flush as transcript.done so the client commits its current bubble; post-
-    // resume deltas then start a fresh bubble.
-    this.flushPendingTranscripts()
     this.userSpeaking = false
     this.sendToClient?.({ type: "session.rotating" })
     this.pauseWatchdog()

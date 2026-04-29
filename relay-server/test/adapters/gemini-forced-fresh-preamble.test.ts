@@ -46,6 +46,9 @@ describe("GeminiAdapter forced-fresh preamble rebuild", () => {
     await waitMs(150)
 
     expect(handle.setupsReceived).toHaveLength(2)
+    const initialInstruction = handle.setupsReceived[0].systemInstruction?.parts?.[0]?.text ?? ""
+    expect(initialInstruction).not.toContain("Four Barrel")
+    expect(initialInstruction).not.toContain("Charmaine")
     const resumedInstruction = handle.setupsReceived[1].systemInstruction?.parts?.[0]?.text ?? ""
     expect(resumedInstruction).toContain("San Francisco")
     expect(resumedInstruction).toContain("April 15 to 22")
