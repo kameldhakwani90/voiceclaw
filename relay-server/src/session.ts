@@ -10,7 +10,7 @@ import type {
 } from "./types.js"
 import type { ProviderAdapter, SendToClient } from "./adapters/types.js"
 import { createAdapter } from "./adapters/index.js"
-import { handleToolCall, resolveTavilyKey } from "./tools/index.js"
+import { executeSyncTool, findRelayTool, resolveTavilyKey } from "./tools/index.js"
 import { askBrain } from "./tools/brain.js"
 import { webSearch } from "./tools/web-search.js"
 import { buildInstructions } from "./instructions.js"
@@ -18,6 +18,7 @@ import { log, error as logError } from "./log.js"
 import { TurnTracer } from "./tracing/turn-tracer.js"
 import { MediaCapture } from "./media/capture.js"
 import { trackBackgroundTask } from "./shutdown.js"
+
 const SERVER_SIDE_TOOLS = new Set(["echo_tool", "ask_brain", "web_search"])
 
 export class RelaySession {
@@ -151,28 +152,42 @@ export class RelaySession {
   private handleServerToolCall(callId: string, name: string, args: string) {
     log(`[session:${this.id}] Handling server-side tool: ${name}`)
 
-    // Synchronous tools
-    const syncResult = handleToolCall(name, args)
+    const tool = this.config ? findRelayTool(this.config, name) : null
+
+    const syncResult = executeSyncTool(name, args)
     if (syncResult !== null) {
       this.tracer.endToolCall(callId, syncResult)
       this.adapter?.sendToolResult(callId, syncResult)
       return
     }
 
-    // Async tools
+    const blocking = tool?.blocking ?? false
+    if (blocking) {
+      this.handleBlockingTool(callId, name, args)
+      return
+    }
+
     if (name === "ask_brain") {
       this.handleAskBrain(callId, args)
       return
     }
 
-    if (name === "web_search") {
-      this.handleWebSearch(callId, args)
-      return
-    }
-
+    log(`[session:${this.id}] No async handler registered for non-blocking tool: ${name}`)
   }
 
-  private handleWebSearch(callId: string, args: string) {
+  private handleBlockingTool(callId: string, name: string, args: string) {
+    if (name === "web_search") {
+      this.runWebSearch(callId, args)
+      return
+    }
+    if (name === "ask_brain") {
+      this.runBlockingAskBrain(callId, args)
+      return
+    }
+    log(`[session:${this.id}] No blocking executor registered for tool: ${name}`)
+  }
+
+  private runWebSearch(callId: string, args: string) {
     if (!this.config) return
 
     // Resolve the Tavily key with the same precedence the tool registry used
@@ -210,7 +225,7 @@ export class RelaySession {
 
     // Run inside the tool span's OTel context so any future child spans (e.g.
     // if we add per-result tracing) attach to the right parent. Same pattern
-    // as handleAskBrain — never use context.active() as a fallback.
+    // as runBlockingAskBrain — never use context.active() as a fallback.
     const ctx = this.tracer.getToolSpanContext(callId) ?? ROOT_CONTEXT
     const run = () => webSearch(query, { apiKey: tavilyKey }, controller.signal)
 
@@ -225,9 +240,6 @@ export class RelaySession {
       }
 
       this.tracer.endToolCall(callId, result)
-      // web_search is short enough to send directly as the tool result rather
-      // than the inject-context dance ask_brain does. The model sees structured
-      // {answer, results[]} and can speak it naturally on the same turn.
       this.adapter?.sendToolResult(callId, result)
     }).catch((err) => {
       const message = err instanceof Error ? err.message : "web search failed"
@@ -237,6 +249,71 @@ export class RelaySession {
       this.tracer.endToolCall(callId, errorPayload, message)
 
       if (!controller.signal.aborted) {
+        this.adapter?.sendToolResult(callId, errorPayload)
+      }
+    }).finally(() => {
+      this.inFlightTools.delete(callId)
+    })
+  }
+
+  private runBlockingAskBrain(callId: string, args: string) {
+    if (!this.config) return
+
+    const controller = new AbortController()
+    this.inFlightTools.set(callId, controller)
+
+    let query: string
+    try {
+      const parsed = JSON.parse(args)
+      query = parsed.query
+      if (typeof query !== "string" || query.trim() === "") {
+        throw new Error("missing or empty query")
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "invalid arguments"
+      const errorPayload = JSON.stringify({ error: msg })
+      this.tracer.endToolCall(callId, errorPayload, msg)
+      this.adapter?.sendToolResult(callId, errorPayload)
+      this.inFlightTools.delete(callId)
+      return
+    }
+
+    const sendToClient: SendToClient = (event) => this.send(event)
+    const gatewayUrl = process.env.BRAIN_GATEWAY_URL || process.env.OPENCLAW_GATEWAY_URL || "http://localhost:18789"
+    const authToken = process.env.BRAIN_GATEWAY_AUTH_TOKEN || process.env.OPENCLAW_GATEWAY_AUTH_TOKEN || this.config.apiKey
+    const sessionKey = this.config.sessionKey || this.id
+
+    const brainStart = Date.now()
+    log(`[session:${this.id}] ask_brain (blocking) → ${gatewayUrl}`)
+
+    const brainCtx = this.tracer.getToolSpanContext(callId) ?? ROOT_CONTEXT
+    const runAskBrain = () => askBrain(query, {
+      gatewayUrl,
+      authToken,
+      sessionId: sessionKey,
+    }, sendToClient, callId, controller.signal)
+
+    context.with(brainCtx, runAskBrain).then((result) => {
+      const brainMs = Date.now() - brainStart
+      log(`[session:${this.id}] ask_brain (blocking) completed in ${brainMs}ms`)
+
+      if (controller.signal.aborted) {
+        this.tracer.endToolCall(callId, JSON.stringify({ status: "cancelled" }), "cancelled")
+        return
+      }
+
+      this.tracer.endToolCall(callId, result)
+      this.send({ type: "brain.result", callId, query, result })
+      this.adapter?.sendToolResult(callId, result)
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : "brain agent call failed"
+      logError(`[session:${this.id}] ask_brain (blocking) error:`, message)
+
+      const errorPayload = JSON.stringify({ error: message })
+      this.tracer.endToolCall(callId, errorPayload, message)
+
+      if (!controller.signal.aborted) {
+        this.send({ type: "brain.result", callId, query, error: message })
         this.adapter?.sendToolResult(callId, errorPayload)
       }
     }).finally(() => {
