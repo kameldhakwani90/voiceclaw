@@ -88,6 +88,7 @@ export default defineConfig({
             { slug: 'desktop/chat-actions', label: 'Desktop: chat actions (right-click menu)' },
             { slug: 'desktop/releasing', label: 'Desktop: releasing' },
             { slug: 'mobile-app' },
+            { slug: 'canvas-mode', label: 'Canvas mode (in design)', badge: { text: 'Preview', variant: 'note' } },
           ],
         },
         {
