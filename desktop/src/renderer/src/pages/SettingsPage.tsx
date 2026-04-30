@@ -77,6 +77,8 @@ export function SettingsPage() {
   const [debugMode, setDebugMode] = useState(false)
   const [showLatency, setShowLatency] = useState(false)
   const [tracingEnabled, setTracingEnabled] = useState(false)
+  const [exportingBundle, setExportingBundle] = useState(false)
+  const [bundleToast, setBundleToast] = useState<{ ok: boolean; message: string } | null>(null)
 
   // Agent identity (name + description)
   const [agentName, setAgentName] = useState('')
@@ -283,6 +285,36 @@ export function SettingsPage() {
   const toggleTelemetry = useCallback(async (v: boolean) => {
     setTelemetryEnabled(v)
     await setOptedOutRenderer(!v)
+  }, [])
+
+  const exportBundle = useCallback(async () => {
+    const SUPPRESS_KEY = 'diag_privacy_preview_suppressed'
+    const suppressed = await getSetting(SUPPRESS_KEY)
+    if (suppressed !== 'true') {
+      const confirmed = await showPrivacyPreview()
+      if (!confirmed.proceed) return
+      if (confirmed.suppress) await setSetting(SUPPRESS_KEY, 'true')
+    }
+
+    setExportingBundle(true)
+    setBundleToast(null)
+    try {
+      const result = await window.electronAPI?.diagnostics?.export?.()
+      if (!result) {
+        setBundleToast({ ok: false, message: 'Export not available.' })
+        return
+      }
+      if (result.ok) {
+        setBundleToast({ ok: true, message: 'Diagnostic bundle saved to Downloads.' })
+      } else {
+        setBundleToast({ ok: false, message: result.error })
+      }
+    } catch (err) {
+      setBundleToast({ ok: false, message: err instanceof Error ? err.message : 'Export failed.' })
+    } finally {
+      setExportingBundle(false)
+      setTimeout(() => setBundleToast(null), 6000)
+    }
   }, [])
 
   const resetBundled = useCallback(async () => {
@@ -658,6 +690,32 @@ export function SettingsPage() {
               Reveal
             </Button>
           </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-foreground">Export diagnostic bundle</p>
+              <p className="text-xs text-muted-foreground">Bundles logs and config (with API keys redacted) for support. Saved to Downloads.</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={exportBundle}
+              disabled={exportingBundle}
+            >
+              {exportingBundle ? (
+                <span className="flex items-center gap-1.5">
+                  <span className="h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  Bundling…
+                </span>
+              ) : 'Export'}
+            </Button>
+          </div>
+
+          {bundleToast && (
+            <p className={`text-xs ${bundleToast.ok ? 'text-[var(--brand-sage)]' : 'text-destructive'}`}>
+              {bundleToast.message}
+            </p>
+          )}
         </Card>
 
         {/* Privacy */}
@@ -691,6 +749,68 @@ export function SettingsPage() {
       </div>
     </div>
   )
+}
+
+function showPrivacyPreview(): Promise<{ proceed: boolean; suppress: boolean }> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div')
+    overlay.style.cssText =
+      'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center'
+
+    const modal = document.createElement('div')
+    modal.style.cssText =
+      'background:var(--background,#1a1a1a);color:var(--foreground,#fff);border:1px solid var(--border,#333);border-radius:8px;padding:20px;max-width:420px;width:90%;font-family:inherit;font-size:13px;line-height:1.5'
+
+    modal.innerHTML = `
+      <p style="font-weight:600;margin-bottom:12px">What goes in the bundle?</p>
+      <p style="margin-bottom:6px;color:var(--muted-foreground,#999);font-size:12px">INCLUDED</p>
+      <ul style="margin:0 0 12px 16px;padding:0;color:var(--foreground,#fff);font-size:12px">
+        <li>App version, platform, OS</li>
+        <li>Last 7 days of log files</li>
+        <li>OpenClaw config (API keys replaced with &lt;redacted&gt;)</li>
+        <li>Workspace file names + sizes (no file contents)</li>
+        <li>Database schema only (no message history)</li>
+        <li>List of configured provider names (no key values)</li>
+        <li>Service health snapshot</li>
+      </ul>
+      <p style="margin-bottom:6px;color:var(--muted-foreground,#999);font-size:12px">NOT INCLUDED</p>
+      <ul style="margin:0 0 16px 16px;padding:0;color:var(--muted-foreground,#999);font-size:12px">
+        <li>API keys or auth tokens</li>
+        <li>Conversation history or messages</li>
+        <li>Workspace file contents</li>
+        <li>Audio recordings</li>
+      </ul>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="diag-suppress" style="cursor:pointer" />
+        Don't ask again
+      </label>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button id="diag-cancel" style="padding:6px 14px;border-radius:5px;border:1px solid var(--border,#444);background:transparent;color:var(--foreground,#fff);font-size:13px;cursor:pointer">Cancel</button>
+        <button id="diag-ok" style="padding:6px 14px;border-radius:5px;border:none;background:var(--primary,#4a7c59);color:#fff;font-size:13px;cursor:pointer;font-weight:500">Export</button>
+      </div>
+    `
+
+    overlay.appendChild(modal)
+    document.body.appendChild(overlay)
+
+    const cleanup = () => document.body.removeChild(overlay)
+
+    modal.querySelector('#diag-cancel')!.addEventListener('click', () => {
+      cleanup()
+      resolve({ proceed: false, suppress: false })
+    })
+    modal.querySelector('#diag-ok')!.addEventListener('click', () => {
+      const suppress = (modal.querySelector('#diag-suppress') as HTMLInputElement).checked
+      cleanup()
+      resolve({ proceed: true, suppress })
+    })
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        cleanup()
+        resolve({ proceed: false, suppress: false })
+      }
+    })
+  })
 }
 
 function maskKey(key: string): string {

@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting VoiceClaw
-description: What to do when something isn't working — how to find log files, reset settings, and get help.
+description: What to do when something isn't working — how to find log files, export a diagnostic bundle, and get help.
 ---
 
 If something isn't working as expected, the first step is to check the log files VoiceClaw writes on your Mac.
@@ -10,6 +10,38 @@ If something isn't working as expected, the first step is to check the log files
 Open **Settings → Debug → Reveal Logs in Finder**. This opens the `~/Library/Logs/VoiceClaw/` folder directly in Finder.
 
 Attach the most recent `.log` file when reporting a bug or asking for help — it contains the information needed to diagnose most issues.
+
+## Export a diagnostic bundle
+
+If our team asks for more detail, you can export a bundle with one click:
+
+1. Open VoiceClaw and go to **Settings**.
+2. Scroll to the **Debug** section.
+3. Click **Export** next to "Export diagnostic bundle".
+4. On first run, a preview dialog tells you exactly what will and won't be included. Click **Export** to continue (check "Don't ask again" to skip this in the future).
+5. The bundle is saved to your **Downloads** folder and revealed in Finder automatically.
+6. Attach the ZIP file to your support email or GitHub issue.
+
+### What's in the bundle
+
+| Item | Notes |
+|------|-------|
+| App version, platform, OS | As-is |
+| Log files (last 7 days) | As-is |
+| OpenClaw config | **API keys replaced with `<redacted>`** |
+| Workspace file list | Names and sizes only — no file contents |
+| Database schema | Table definitions only — no messages or history |
+| List of configured providers | Provider names only — no key values |
+| Service health snapshot | Relay and OpenClaw status at export time |
+
+### What's never included
+
+- API keys or auth tokens
+- Conversation history or voice transcripts
+- Workspace file contents (SOUL.md, IDENTITY.md, etc.)
+- Audio recordings
+
+The bundle is a plain ZIP — no encryption, no automatic upload. It goes wherever you send it.
 
 ## Common problems
 

@@ -44,6 +44,9 @@ declare global {
   interface Window {
     electronAPI: {
       platform: string
+      diagnostics?: {
+        export: () => Promise<{ ok: true; path: string } | { ok: false; error: string }>
+      }
       db: {
         createConversation: (title?: string) => Promise<Conversation>
         getLatestConversation: () => Promise<Conversation | null>

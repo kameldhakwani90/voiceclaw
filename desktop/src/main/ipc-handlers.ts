@@ -4,6 +4,7 @@ import { isLaunchAtLoginEnabled, setLaunchAtLogin } from './login-items'
 import { serviceManager } from './services/service-manager'
 import { buildRelayEnv } from './services/relay-server'
 import { applyGeminiKeyToOpenClawConfig } from './services/openclaw-gateway'
+import { buildDiagnosticBundle } from './services/diagnostic-bundle'
 import {
   type AgentIdentity,
   readAgentIdentity,
@@ -352,6 +353,15 @@ export function registerIpcHandlers() {
     const dir = app.getPath('logs')
     await shell.openPath(dir)
     return { ok: true, path: dir }
+  })
+
+  // Diagnostic bundle
+  ipcMain.handle('diagnostics:export', async () => {
+    const result = await buildDiagnosticBundle()
+    if (result.ok) {
+      shell.showItemInFolder(result.path)
+    }
+    return result
   })
 
   // Network: test relay server connection from main process (avoids CORS)
