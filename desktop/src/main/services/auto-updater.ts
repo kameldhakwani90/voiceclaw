@@ -2,7 +2,7 @@ import { app } from 'electron'
 import type { AppUpdater, UpdateInfo, ProgressInfo } from 'electron-updater'
 import { openLogStream } from '../logs'
 import { getDb } from '../db'
-import { getMainWindow } from '../window-lifecycle'
+import { getMainWindow, markQuitting } from '../window-lifecycle'
 
 export type UpdateStatus =
   | 'idle'
@@ -104,8 +104,9 @@ export async function checkForUpdatesNow(): Promise<UpdateState> {
 }
 
 export function installNow(source: 'banner' | 'settings' | 'tray'): void {
-  if (!updaterInstance || state.status !== 'staged') return
+  if (!updaterInstance || state.stagedVersion == null) return
   log(`install initiated source=${source}`)
+  markQuitting()
   updaterInstance.quitAndInstall(false, true)
 }
 
@@ -135,6 +136,12 @@ export async function initAutoUpdater(onRebuildTray?: RebuildTrayFn): Promise<vo
 
   updater.autoDownload = true
   updater.autoInstallOnAppQuit = true
+
+  updater.setFeedURL({
+    provider: 'generic',
+    url: 'https://raw.githubusercontent.com/yagudaev/voiceclaw/main/desktop/releases',
+    channel: 'latest-mac',
+  })
 
   updater.on('checking-for-update', () => {
     state.status = 'checking'
@@ -194,7 +201,13 @@ export async function initAutoUpdater(onRebuildTray?: RebuildTrayFn): Promise<vo
   try {
     await updater.checkForUpdates()
   } catch (err) {
-    log('initial check failed', err)
+    const msg = err instanceof Error ? err.message : String(err)
+    state.status = 'error'
+    state.error = msg
+    state.lastChecked = Date.now()
+    persistLastChecked(state.lastChecked)
+    log('initial check failed', msg)
+    broadcast('updates:stateChanged', getUpdateState())
   }
 
   const FOUR_HOURS = 4 * 60 * 60 * 1000

@@ -26,8 +26,17 @@ export function UpdateBanner() {
       setDismissed(false)
     })
 
+    const removeStateChanged = api.onStateChanged((s) => {
+      if (s.stagedVersion) {
+        setStaged({ version: s.stagedVersion, releaseNotes: s.releaseNotes })
+      } else {
+        setStaged(null)
+      }
+    })
+
     return () => {
       removeStaged()
+      removeStateChanged()
     }
   }, [])
 
