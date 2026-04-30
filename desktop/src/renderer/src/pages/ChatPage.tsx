@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
-import { Copy, Mic, MicOff, PhoneOff, Plus, Phone, Monitor, MonitorOff, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { Clock, Copy, Mic, MicOff, PhoneOff, Plus, Phone, Monitor, MonitorOff, Trash2 } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { MessageBubble } from '../components/MessageBubble'
 import { MessageContextMenu, type MessageContextMenuItem } from '../components/MessageContextMenu'
+import { MessageGroupSeparator } from '../components/MessageGroupSeparator'
 import { ThinkingDots } from '../components/ThinkingDots'
 import { AudioLevelMeter } from '../components/AudioLevelMeter'
 import { VoiceClawMark } from '../components/brand/VoiceClawMark'
@@ -32,6 +33,7 @@ import {
   type Message,
 } from '../lib/db'
 import { getVoiceForProvider, providerForModel } from '../lib/voice-prefs'
+import { groupMessages } from '../lib/message-grouping'
 
 const DEFAULT_REALTIME_MODEL = 'gemini-3.1-flash-live-preview'
 const REALTIME_MODELS = ['gemini-3.1-flash-live-preview', 'grok-voice-think-fast-1.0'] as const
@@ -65,6 +67,7 @@ export function ChatPage() {
   const activeRelayUrlRef = useRef<string>('')
   const brainCallStartRef = useRef<Map<string, number>>(new Map())
   const [messageMenu, setMessageMenu] = useState<{ x: number; y: number; message: Message } | null>(null)
+  const [showTimes, setShowTimes] = useState(false)
   const { selectedConversationId, selectConversation } = useConversationContext()
 
   // Reload messages from DB — single source of truth, prevents duplicates.
@@ -110,6 +113,10 @@ export function ChatPage() {
     } catch (err) {
       console.warn('[ChatPage] Failed to copy message:', err)
     }
+  }, [])
+
+  const handleToggleShowTimes = useCallback(() => {
+    setShowTimes((v) => !v)
   }, [])
 
   // Auto-scroll to bottom on new messages
@@ -315,11 +322,17 @@ export function ChatPage() {
     const outputDeviceId = (await getSetting('output_device_id')) || undefined
 
     const convId = conversationIdRef.current
+    const nowMs = Date.now()
     const conversationHistory = convId
       ? (await getMessages(convId))
           .filter((m) => m.role === 'user' || m.role === 'assistant')
           .slice(-200)
-          .map((m) => ({ role: m.role as 'user' | 'assistant', text: m.content }))
+          .map((m) => ({
+            role: m.role as 'user' | 'assistant',
+            text: m.content,
+            timestamp: m.created_at,
+            relativeMs: Math.max(0, nowMs - m.created_at),
+          }))
       : []
 
     setActiveRealtimeModel(model)
@@ -450,6 +463,11 @@ export function ChatPage() {
       ? 'Screen sharing is only available with Gemini Live. Grok Voice does not support video input.'
       : 'Share screen'
 
+  const timelineItems = useMemo(
+    () => buildTimeline(messages, toolCalls),
+    [messages, toolCalls],
+  )
+
   // Keyboard shortcuts: Cmd+N (new), Cmd+M (mute), Cmd+E (end call)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -507,18 +525,29 @@ export function ChatPage() {
             </p>
           </div>
         )}
-        {buildTimeline(messages, toolCalls).map((item) =>
-          item.kind === 'message' ? (
+        {timelineItems.map((item) => {
+          if (item.kind === 'separator') {
+            return (
+              <MessageGroupSeparator
+                key={`sep-${item.timestamp}-${item.label}`}
+                label={item.label}
+              />
+            )
+          }
+          if (item.kind === 'tool') {
+            return <ToolCallRow key={`tool-${item.data.callId}`} entry={item.data} />
+          }
+          return (
             <MessageBubble
               key={`msg-${item.data.id}`}
               message={item.data}
               showLatency={showLatency}
+              showTimestamp={showTimes}
+              isLastInBurst={item.isLastInBurst}
               onContextMenu={handleMessageContextMenu}
             />
-          ) : (
-            <ToolCallRow key={`tool-${item.data.callId}`} entry={item.data} />
           )
-        )}
+        })}
         {/* Streaming text */}
         {streamingText.trim() && (
           <div className={`flex ${streamingRole === 'user' ? 'justify-end' : 'justify-start'} mb-3`}>
@@ -644,7 +673,13 @@ export function ChatPage() {
           x={messageMenu.x}
           y={messageMenu.y}
           onClose={closeMessageMenu}
-          items={buildMessageMenuItems(messageMenu.message, handleCopyMessage, handleDeleteMessage)}
+          items={buildMessageMenuItems(
+            messageMenu.message,
+            showTimes,
+            handleCopyMessage,
+            handleDeleteMessage,
+            handleToggleShowTimes,
+          )}
         />
       )}
     </div>
@@ -656,19 +691,27 @@ export function ChatPage() {
 // ---------------------------------------------------------------------------
 
 type TimelineItem =
-  | { kind: 'message'; ts: number; data: Message }
+  | { kind: 'message'; ts: number; data: Message; isFirstInBurst: boolean; isLastInBurst: boolean }
   | { kind: 'tool'; ts: number; data: ToolCallEntry }
+  | { kind: 'separator'; ts: number; timestamp: number; label: string }
 
 function buildMessageMenuItems(
   message: Message,
+  showTimes: boolean,
   onCopy: (m: Message) => void,
   onDelete: (m: Message) => void,
+  onToggleShowTimes: () => void,
 ): MessageContextMenuItem[] {
   return [
     {
       label: 'Copy',
       icon: <Copy size={14} />,
       onSelect: () => onCopy(message),
+    },
+    {
+      label: showTimes ? 'Hide times' : 'Show times',
+      icon: <Clock size={14} />,
+      onSelect: onToggleShowTimes,
     },
     {
       label: 'Delete message',
@@ -680,11 +723,47 @@ function buildMessageMenuItems(
 }
 
 function buildTimeline(messages: Message[], toolCalls: ToolCallEntry[]): TimelineItem[] {
+  const grouped = groupMessages(messages)
+  const messageMeta = new Map<number, { isFirstInBurst: boolean; isLastInBurst: boolean }>()
+  const separators: TimelineItem[] = []
+
+  for (const item of grouped) {
+    if (item.kind === 'separator') {
+      separators.push({
+        kind: 'separator',
+        ts: item.timestamp,
+        timestamp: item.timestamp,
+        label: item.label,
+      })
+    } else {
+      messageMeta.set(item.message.id, {
+        isFirstInBurst: item.isFirstInBurst,
+        isLastInBurst: item.isLastInBurst,
+      })
+    }
+  }
+
   const items: TimelineItem[] = [
-    ...messages.map((m) => ({ kind: 'message' as const, ts: m.created_at, data: m })),
+    ...separators,
+    ...messages.map((m) => {
+      const meta = messageMeta.get(m.id) ?? { isFirstInBurst: true, isLastInBurst: true }
+      return {
+        kind: 'message' as const,
+        ts: m.created_at,
+        data: m,
+        isFirstInBurst: meta.isFirstInBurst,
+        isLastInBurst: meta.isLastInBurst,
+      }
+    }),
     ...toolCalls.map((t) => ({ kind: 'tool' as const, ts: t.startedAt, data: t })),
   ]
-  items.sort((a, b) => a.ts - b.ts)
+
+  items.sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts - b.ts
+    if (a.kind === 'separator' && b.kind !== 'separator') return -1
+    if (b.kind === 'separator' && a.kind !== 'separator') return 1
+    return 0
+  })
   return items
 }
 

@@ -1,16 +1,25 @@
 import type { MouseEvent } from 'react'
 import type { Message } from '../lib/db'
+import { formatExactTimestamp } from '../lib/message-grouping'
 
 interface MessageBubbleProps {
   message: Message
   showLatency?: boolean
+  showTimestamp?: boolean
+  isLastInBurst?: boolean
   onContextMenu?: (event: MouseEvent<HTMLDivElement>, message: Message) => void
 }
 
 const MD_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g
 const URL_IMAGE_REGEX = /(?:^|\s)(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?)/gi
 
-export function MessageBubble({ message, showLatency, onContextMenu }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  showLatency,
+  showTimestamp,
+  isLastInBurst,
+  onContextMenu,
+}: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const parts = parseContent(message.content)
 
@@ -21,10 +30,14 @@ export function MessageBubble({ message, showLatency, onContextMenu }: MessageBu
       }
     : undefined
 
+  const burstSpacing = isLastInBurst === false ? 'mb-0.5' : 'mb-3'
+  const exactTime = formatExactTimestamp(message.created_at)
+
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} ${burstSpacing}`}>
       <div
         onContextMenu={handleContextMenu}
+        title={exactTime}
         className={`
           max-w-[80%] rounded-md px-4 py-2.5 text-sm leading-relaxed
           ${isUser
@@ -47,6 +60,9 @@ export function MessageBubble({ message, showLatency, onContextMenu }: MessageBu
               loading="lazy"
             />
           ),
+        )}
+        {showTimestamp && (
+          <div className="text-[10px] mt-1.5 opacity-60">{exactTime}</div>
         )}
         {showLatency && message.stt_latency_ms != null && (
           <div className="text-[10px] mt-1.5 opacity-50">
@@ -100,3 +116,4 @@ function parseContent(content: string): ContentPart[] {
 
   return [{ type: 'text', text: content }]
 }
+
