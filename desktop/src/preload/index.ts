@@ -206,6 +206,12 @@ const electronAPI = {
       context?: Record<string, unknown>,
     ) => ipcRenderer.invoke('telemetry:captureException', err, context) as Promise<void>,
   },
+  diagnostics: {
+    export: () =>
+      ipcRenderer.invoke('diagnostics:export') as Promise<
+        { ok: true; path: string } | { ok: false; error: string }
+      >,
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)
