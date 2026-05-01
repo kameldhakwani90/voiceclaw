@@ -58,15 +58,17 @@ The local openclaw gateway process has stopped. Quit and relaunch VoiceClaw — 
 
 The gateway responded but returned no content. Expand the detail panel in the chat bubble to see the HTTP status, response body excerpt, and a log hint. Check `~/Library/Logs/VoiceClaw/openclaw-gateway.log` for the root cause (common: Gemini API key expired, quota exceeded, or model name changed in config).
 
-### Run the brain doctor
+### Run brain diagnostic
 
-From the repo root (developer mode) you can run a 10-point diagnostic:
+VoiceClaw has a built-in 10-point diagnostic for brain problems. You don't need a terminal or developer tools to use it:
 
-```sh
-yarn brain:doctor
-```
+1. Open **Settings → Debug**.
+2. Click **Run** next to "Run brain diagnostic".
+3. Wait a few seconds while it checks your setup.
+4. Each check shows a green **✓** (pass) or red **✗** (fail). Failed checks include a plain-English hint explaining what to do.
+5. Click **Copy results** to copy the full JSON to your clipboard and paste it into a support email or GitHub issue.
 
-Each check prints `PASS`, `FAIL`, or `SKIP` with an actionable next step if something is wrong. The same output is included automatically in the diagnostic bundle (see above) as `brain-doctor.json`.
+Clicking **Run** again after fixing something re-runs all checks so you can confirm the fix worked.
 
 The 10 checks are:
 
@@ -80,6 +82,18 @@ The 10 checks are:
 8. OpenClaw is reachable on the port it advertised
 9. Direct call to openclaw's completions endpoint returns a non-empty response
 10. Gemini API key is accepted by Google's API
+
+The same diagnostic runs automatically as part of the diagnostic bundle (see above) and is saved as `brain-doctor.json`.
+
+#### For developers: CLI alternative
+
+If you prefer a terminal, you can run the same checks from the repo root:
+
+```sh
+yarn brain:doctor
+# or, for machine-readable output:
+yarn brain:doctor --json
+```
 
 ## Common problems
 

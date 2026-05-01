@@ -86,6 +86,9 @@ export function SettingsPage() {
   const [tracingEnabled, setTracingEnabled] = useState(false)
   const [exportingBundle, setExportingBundle] = useState(false)
   const [bundleToast, setBundleToast] = useState<{ ok: boolean; message: string } | null>(null)
+  const [doctorRunning, setDoctorRunning] = useState(false)
+  const [doctorResult, setDoctorResult] = useState<DoctorResultShape | null>(null)
+  const [doctorCopied, setDoctorCopied] = useState(false)
 
   // Agent identity (name + description)
   const [agentName, setAgentName] = useState('')
@@ -330,6 +333,31 @@ export function SettingsPage() {
       setTimeout(() => setBundleToast(null), 6000)
     }
   }, [])
+
+  const runBrainDoctor = useCallback(async () => {
+    setDoctorRunning(true)
+    setDoctorResult(null)
+    setDoctorCopied(false)
+    try {
+      const result = await window.electronAPI?.brain?.runDoctor?.()
+      if (result) setDoctorResult(result)
+    } catch (err) {
+      console.warn('[SettingsPage] brain doctor failed', err)
+    } finally {
+      setDoctorRunning(false)
+    }
+  }, [])
+
+  const copyDoctorResults = useCallback(async () => {
+    if (!doctorResult) return
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(doctorResult, null, 2))
+      setDoctorCopied(true)
+      setTimeout(() => setDoctorCopied(false), 2500)
+    } catch {
+      // clipboard unavailable — silently skip
+    }
+  }, [doctorResult])
 
   const resetBundled = useCallback(async () => {
     setResetting(true)
@@ -786,6 +814,34 @@ export function SettingsPage() {
 
           <div className="flex items-center justify-between">
             <div>
+              <p className="text-sm text-foreground">Run brain diagnostic</p>
+              <p className="text-xs text-muted-foreground">10-point check of the brain pipeline — openclaw, relay, Gemini API, and more.</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={runBrainDoctor}
+              disabled={doctorRunning}
+            >
+              {doctorRunning ? (
+                <span className="flex items-center gap-1.5">
+                  <span className="h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  Running…
+                </span>
+              ) : 'Run'}
+            </Button>
+          </div>
+
+          {doctorResult && (
+            <BrainDoctorPanel
+              result={doctorResult}
+              copied={doctorCopied}
+              onCopy={copyDoctorResults}
+            />
+          )}
+
+          <div className="flex items-center justify-between">
+            <div>
               <p className="text-sm text-foreground">Export diagnostic bundle</p>
               <p className="text-xs text-muted-foreground">Bundles logs and config (with API keys redacted) for support. Saved to Downloads.</p>
             </div>
@@ -928,6 +984,64 @@ function normalizeRealtimeModel(model: string | null): RealtimeModel {
 }
 
 // --- Helper Components ---
+
+type DoctorCheckRow = {
+  status: 'PASS' | 'FAIL' | 'SKIP'
+  label: string
+  detail: string | null
+  hint: string | null
+}
+
+type DoctorResultShape = {
+  checks: DoctorCheckRow[]
+  passed: number
+  failed: number
+  skipped: number
+}
+
+function BrainDoctorPanel({
+  result,
+  copied,
+  onCopy,
+}: {
+  result: DoctorResultShape
+  copied: boolean
+  onCopy: () => void
+}) {
+  return (
+    <div className="rounded-md border border-input bg-muted/30 overflow-hidden">
+      <div className="px-3 py-2 flex items-center justify-between border-b border-input">
+        <span className="text-xs font-medium text-foreground">
+          {result.passed} passed · {result.failed} failed · {result.skipped} skipped
+        </span>
+        <Button variant="ghost" size="sm" onClick={onCopy}>
+          {copied ? 'Copied!' : 'Copy results'}
+        </Button>
+      </div>
+      <ul className="divide-y divide-input">
+        {result.checks.map((check, i) => (
+          <li key={i} className="px-3 py-2 space-y-0.5">
+            <div className="flex items-center gap-2">
+              <span className={`text-sm leading-none ${
+                check.status === 'PASS'
+                  ? 'text-[var(--brand-sage)]'
+                  : check.status === 'FAIL'
+                  ? 'text-destructive'
+                  : 'text-muted-foreground'
+              }`}>
+                {check.status === 'PASS' ? '✓' : check.status === 'FAIL' ? '✗' : '–'}
+              </span>
+              <span className="text-sm text-foreground">{check.label}</span>
+            </div>
+            {check.status === 'FAIL' && check.hint && (
+              <p className="text-xs text-muted-foreground pl-5">{check.hint}</p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
 
 function ConnectionStatus({
   status,
