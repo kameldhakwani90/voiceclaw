@@ -15,7 +15,7 @@ const GEMINI_VOICES = [
 
 const DEFAULT_NAME = 'Pam'
 const DEFAULT_DESCRIPTION = 'Friendly, calm, helps me stay on top of things.'
-const DEFAULT_VOICE = 'Aoede'
+const DEFAULT_VOICE = 'Zephyr'
 
 type Props = {
   onContinue?: (patch: OnboardingPayload) => void
@@ -62,19 +62,29 @@ export function StepIdentity({
         text: `Hi, I'm ${name.trim() || DEFAULT_NAME}.`,
       })
       if (!result.ok) {
+        console.error('[voice-preview] api error', result.error)
         setPreviewError(result.error)
+        setPreviewing(null)
         return
       }
+      console.info('[voice-preview] got audio', { voiceId, mimeType: result.mimeType, bytes: result.audioBase64.length })
       const audio = decodeAudio(result.audioBase64, result.mimeType)
       audioRef.current = audio
       audio.onended = () => setPreviewing((p) => (p === voiceId ? null : p))
+      audio.onerror = (e) => {
+        console.error('[voice-preview] audio element error', e, 'mimeType:', result.mimeType)
+        setPreviewError(`Audio playback failed (${result.mimeType}). Try a different voice.`)
+        setPreviewing((p) => (p === voiceId ? null : p))
+      }
       try {
         await audio.play()
       } catch (err) {
+        console.error('[voice-preview] audio.play() rejected', err)
         setPreviewError(err instanceof Error ? err.message : 'Could not play audio.')
         setPreviewing(null)
       }
     } catch (err) {
+      console.error('[voice-preview] handler threw', err)
       setPreviewError(err instanceof Error ? err.message : 'Preview failed.')
       setPreviewing(null)
     }

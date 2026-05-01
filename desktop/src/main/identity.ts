@@ -11,7 +11,7 @@ export type AgentIdentity = {
 export const DEFAULT_IDENTITY: AgentIdentity = {
   name: 'Pam',
   description: 'Friendly, calm, helps me stay on top of things.',
-  voice: 'Aoede',
+  voice: 'Zephyr',
 }
 
 export function getWorkspaceDir(): string {
