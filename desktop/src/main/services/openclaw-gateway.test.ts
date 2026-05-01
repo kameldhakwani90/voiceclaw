@@ -25,6 +25,10 @@ vi.mock('fs', () => ({
   },
 }))
 
+vi.mock('../provider-keys', () => ({
+  getProviderKey: () => null,
+}))
+
 describe('resolveBundledOpenClawScript', () => {
   beforeEach(() => {
     originalResourcesPath = process.resourcesPath
@@ -128,7 +132,7 @@ describe('applyGeminiKeyToOpenClawConfig', () => {
     vi.resetModules()
   })
 
-  it('writes provider key, primary model, and plugin enable when no config exists', async () => {
+  it('writes primary model and plugin enable when no config exists', async () => {
     existsRef.fn = () => false
     const { applyGeminiKeyToOpenClawConfig, BUNDLED_GOOGLE_PRIMARY_MODEL } = await import(
       './openclaw-gateway'
@@ -137,7 +141,7 @@ describe('applyGeminiKeyToOpenClawConfig', () => {
     expect(changed).toBe(true)
     expect(writes.length).toBe(1)
     const written = JSON.parse(writes[0].content)
-    expect(written.models.providers.google.apiKey).toBe('AIzaTESTKEY')
+    expect(written.models?.providers?.google).toBeUndefined()
     expect(written.agents.defaults.model.primary).toBe(BUNDLED_GOOGLE_PRIMARY_MODEL)
     expect(written.plugins.entries.google.enabled).toBe(true)
   })
@@ -164,14 +168,10 @@ describe('applyGeminiKeyToOpenClawConfig', () => {
     expect(written.agents.defaults.model.fallbacks).toEqual(['claude-cli/claude-haiku-4-5'])
   })
 
-  it('returns false (no write) when the same key is already in place', async () => {
+  it('returns false (no write) when agent model and plugin are already correct', async () => {
     existsRef.fn = () => true
     readFileRef.fn = () =>
       JSON.stringify({
-        models: {
-          mode: 'merge',
-          providers: { google: { apiKey: 'samekey' } },
-        },
         agents: {
           defaults: {
             model: { primary: 'google/gemini-3.1-pro-preview' },
@@ -180,7 +180,7 @@ describe('applyGeminiKeyToOpenClawConfig', () => {
         plugins: { entries: { google: { enabled: true } } },
       })
     const { applyGeminiKeyToOpenClawConfig } = await import('./openclaw-gateway')
-    const changed = applyGeminiKeyToOpenClawConfig('samekey')
+    const changed = applyGeminiKeyToOpenClawConfig('anykey')
     expect(changed).toBe(false)
     expect(writes.length).toBe(0)
   })
