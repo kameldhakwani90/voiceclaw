@@ -101,6 +101,8 @@ export function streamTextChat(
   }
 
   return () => {
-    if (!didFinish) finish('error', 'cancelled')
+    if (didFinish) return
+    didFinish = true
+    try { ws?.close() } catch {}
   }
 }
