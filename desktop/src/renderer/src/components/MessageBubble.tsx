@@ -159,4 +159,3 @@ function parseContent(content: string): ContentPart[] {
 
   return [{ type: 'text', text: content }]
 }
-

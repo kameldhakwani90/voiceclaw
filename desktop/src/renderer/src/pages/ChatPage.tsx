@@ -521,7 +521,7 @@ export function ChatPage() {
     const recent = (await getMessages(convId))
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .slice(-20, -1)
-      .map((m) => ({ role: m.role as 'user' | 'assistant', text: m.content }))
+      .map((m) => ({ role: m.role as 'user' | 'assistant', text: m.content, timestamp: m.created_at }))
 
     setIsThinking(true)
     streamingRoleRef.current = 'assistant'

@@ -4,22 +4,6 @@ import type { Message } from './db'
 
 const BASE = new Date('2026-04-30T12:00:00').getTime()
 
-function msg(id: number, role: 'user' | 'assistant', offsetMs: number, content = 'hi'): Message {
-  return {
-    id,
-    conversation_id: 1,
-    role,
-    content,
-    created_at: BASE + offsetMs,
-    stt_latency_ms: null,
-    llm_latency_ms: null,
-    tts_latency_ms: null,
-    stt_provider: null,
-    llm_provider: null,
-    tts_provider: null,
-  }
-}
-
 describe('groupMessages', () => {
   it('returns empty for an empty list', () => {
     expect(groupMessages([], { now: BASE })).toEqual([])
@@ -109,3 +93,21 @@ describe('formatExactTimestamp', () => {
     expect(formatExactTimestamp(yesterday, today)).toMatch(/Yesterday/)
   })
 })
+
+// --- Helpers ---
+
+function msg(id: number, role: 'user' | 'assistant', offsetMs: number, content = 'hi'): Message {
+  return {
+    id,
+    conversation_id: 1,
+    role,
+    content,
+    created_at: BASE + offsetMs,
+    stt_latency_ms: null,
+    llm_latency_ms: null,
+    tts_latency_ms: null,
+    stt_provider: null,
+    llm_provider: null,
+    tts_provider: null,
+  }
+}

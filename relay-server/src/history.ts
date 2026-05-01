@@ -53,6 +53,11 @@ export function formatSummaryPreamble(summary: string): string {
   return `## Earlier in this conversation\n${summary.trim()}`
 }
 
+export function formatStampedTurnText(m: HistoryMessage): string {
+  const stamp = formatRelativeStamp(deriveRelativeMs(m))
+  return stamp ? `${stamp} ${m.text}` : m.text
+}
+
 export function formatRecentTurnsPreamble(recent: HistoryMessage[]): string {
   const lines = recent
     .map((m) => {
