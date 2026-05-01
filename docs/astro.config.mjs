@@ -87,8 +87,10 @@ export default defineConfig({
             { slug: 'desktop/volume-control', label: 'Desktop: agent volume control' },
             { slug: 'desktop/chat-actions', label: 'Desktop: chat actions (right-click menu)' },
             { slug: 'desktop/time-grouping', label: 'Desktop: time grouping in chat' },
+            { slug: 'desktop/typing-messages', label: 'Desktop: typing messages' },
             { slug: 'desktop/releasing', label: 'Desktop: releasing' },
             { slug: 'mobile-app' },
+            { slug: 'canvas-mode', label: 'Canvas mode (in design)', badge: { text: 'Preview', variant: 'note' } },
           ],
         },
         {
