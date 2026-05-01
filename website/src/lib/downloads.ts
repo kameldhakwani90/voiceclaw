@@ -2,6 +2,7 @@ const GITHUB_RELEASES_API =
   "https://api.github.com/repos/yagudaev/voiceclaw/releases"
 const RELEASES_FALLBACK_URL = "https://github.com/yagudaev/voiceclaw/releases"
 const RELEASE_REVALIDATE_SECONDS = 300
+const DESKTOP_TAG_PREFIX = "desktop-v"
 
 type GitHubRelease = {
   tag_name: string
@@ -43,15 +44,13 @@ export async function getLatestMacReleaseDownload(): Promise<MacReleaseDownload 
     }
 
     const releases = (await response.json()) as GitHubRelease[]
-    for (const release of releases) {
-      if (release.draft) {
-        continue
-      }
+    const desktopReleases = releases
+      .filter((r) => !r.draft && r.tag_name.startsWith(DESKTOP_TAG_PREFIX))
+      .sort((a, b) => compareDesktopTags(b.tag_name, a.tag_name))
 
+    for (const release of desktopReleases) {
       const dmg = release.assets.find(isMacDmgAsset)
-      if (!dmg) {
-        continue
-      }
+      if (!dmg) continue
 
       return {
         tagName: release.tag_name,
@@ -79,6 +78,21 @@ function isMacDmgAsset(asset: GitHubAsset) {
     asset.name.toLowerCase().endsWith(".dmg") ||
     asset.content_type === "application/x-apple-diskimage"
   )
+}
+
+function compareDesktopTags(a: string, b: string): number {
+  const aParts = parseDesktopTag(a)
+  const bParts = parseDesktopTag(b)
+  for (let i = 0; i < 3; i++) {
+    if (aParts[i] !== bParts[i]) return aParts[i] - bParts[i]
+  }
+  return 0
+}
+
+function parseDesktopTag(tag: string): [number, number, number] {
+  const match = tag.match(/^desktop-v(\d+)\.(\d+)\.(\d+)/)
+  if (!match) return [0, 0, 0]
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
 }
 
 function githubHeaders() {
