@@ -157,7 +157,6 @@
   animation: thinking-bounce 1.4s ease-in-out infinite;
 }
 
-/* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -170,4 +169,12 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted-foreground);
+}
+
+textarea::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+textarea {
+  scrollbar-width: none;
 }
