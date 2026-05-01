@@ -203,6 +203,18 @@ const electronAPI = {
         claude: { available: boolean; path?: string }
         codex: { available: boolean; path?: string }
       }>,
+    runDoctor: () =>
+      ipcRenderer.invoke('brain:runDoctor') as Promise<{
+        checks: Array<{
+          status: 'PASS' | 'FAIL' | 'SKIP'
+          label: string
+          detail: string | null
+          hint: string | null
+        }>
+        passed: number
+        failed: number
+        skipped: number
+      }>,
   },
   identity: {
     get: () =>

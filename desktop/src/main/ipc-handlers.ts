@@ -40,6 +40,7 @@ import {
   validateProviderKey,
 } from './provider-keys'
 import { detectBrains } from './brain-detect'
+import { runAllChecks } from './services/brain-doctor'
 import {
   checkForUpdatesNow,
   getUpdateState,
@@ -512,6 +513,7 @@ export function registerIpcHandlers() {
 
   // Brain detection
   ipcMain.handle('brain:detect', () => detectBrains())
+  ipcMain.handle('brain:runDoctor', () => runAllChecks())
 
   // Agent identity (name, description, voice) — persisted as IDENTITY.md
   // in the bundled openclaw workspace so the relay's instruction builder
