@@ -42,6 +42,7 @@ import {
   applyToolCallCompleted,
   applyToolCallFailed,
   applyToolCallCancelled,
+  applyToolCallProgress,
   type ToolCallEntry,
 } from '../lib/tool-call-store'
 import {
@@ -300,10 +301,8 @@ export function ChatPage() {
     onToolCancelled: (callIds) => {
       setToolCalls((prev) => applyToolCallCancelled(prev, callIds))
     },
-    onToolProgress: (_callId, summary) => {
-      streamingRoleRef.current = 'assistant'
-      setStreamingRole('assistant')
-      setStreamingText(summary)
+    onToolCallProgress: (callId, delta) => {
+      setToolCalls((prev) => applyToolCallProgress(prev, callId, delta))
     },
     onBrainResult: async (callId, query, result, error) => {
       if (error) {
