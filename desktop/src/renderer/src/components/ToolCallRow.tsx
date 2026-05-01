@@ -2,6 +2,28 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Loader2, CheckCircle2, XCircle, Ban } from 'lucide-react'
 import type { ToolCallEntry } from '../lib/tool-call-store'
 
+interface UpstreamDetail {
+  httpStatus?: number
+  httpStatusText?: string
+  bodyExcerpt?: string | null
+  errorClass?: string
+  errorMessage?: string
+  url?: string
+  openclawLogHint?: string
+}
+
+function parseUpstream(raw: string): UpstreamDetail | null {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (parsed && typeof parsed === 'object' && 'upstream' in parsed) {
+      return parsed.upstream as UpstreamDetail
+    }
+  } catch {
+    // not JSON or no upstream field
+  }
+  return null
+}
+
 const RESPONSE_COLLAPSE_THRESHOLD = 800
 
 interface ToolCallRowProps {
@@ -11,6 +33,7 @@ interface ToolCallRowProps {
 export function ToolCallRow({ entry }: ToolCallRowProps) {
   const { status, name, args, result, error, startedAt, durationMs, step } = entry
   const [responseCollapsed, setResponseCollapsed] = useState(false)
+  const [upstreamExpanded, setUpstreamExpanded] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -33,6 +56,7 @@ export function ToolCallRow({ entry }: ToolCallRowProps) {
   const responseLooksStructured = isStructured(responseText)
   const showCollapseToggle =
     status === 'success' && responseText.length > RESPONSE_COLLAPSE_THRESHOLD
+  const upstream = errored ? parseUpstream(responseText) : null
 
   return (
     <div className="mb-3 mx-1">
@@ -92,6 +116,22 @@ export function ToolCallRow({ entry }: ToolCallRowProps) {
               structured={responseLooksStructured}
               collapsed={responseCollapsed}
             />
+            {upstream && (
+              <div className="mt-2">
+                <button
+                  type="button"
+                  className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setUpstreamExpanded((v) => !v)}
+                  aria-expanded={upstreamExpanded}
+                >
+                  {upstreamExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                  What went wrong
+                </button>
+                {upstreamExpanded && (
+                  <UpstreamPanel upstream={upstream} />
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -138,6 +178,36 @@ function ResponseBody({
       {status === 'in-progress' && !errored && (
         <span className="inline-block ml-0.5 w-0.5 h-3 bg-current align-middle animate-pulse" />
       )}
+    </div>
+  )
+}
+
+function UpstreamPanel({ upstream }: { upstream: UpstreamDetail }) {
+  const rows: { label: string; value: string }[] = []
+  if (upstream.httpStatus !== undefined) {
+    rows.push({ label: 'HTTP', value: `${upstream.httpStatus} ${upstream.httpStatusText ?? ''}`.trim() })
+  }
+  if (upstream.errorClass) {
+    rows.push({ label: 'Error', value: `${upstream.errorClass}: ${upstream.errorMessage ?? ''}` })
+  }
+  if (upstream.url) {
+    rows.push({ label: 'URL', value: upstream.url })
+  }
+  if (upstream.bodyExcerpt) {
+    rows.push({ label: 'Body', value: upstream.bodyExcerpt })
+  }
+  if (upstream.openclawLogHint) {
+    rows.push({ label: 'Logs', value: upstream.openclawLogHint })
+  }
+
+  return (
+    <div className="mt-1 rounded-sm border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[10px] font-mono space-y-1">
+      {rows.map(({ label, value }) => (
+        <div key={label} className="flex gap-2 min-w-0">
+          <span className="flex-shrink-0 text-muted-foreground w-10">{label}</span>
+          <span className="text-foreground/80 break-all">{value}</span>
+        </div>
+      ))}
     </div>
   )
 }

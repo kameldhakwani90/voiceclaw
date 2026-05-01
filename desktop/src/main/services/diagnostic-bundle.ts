@@ -10,7 +10,9 @@ import {
   writeFileSync,
   createWriteStream,
 } from 'fs'
-import { join } from 'path'
+import { join, resolve, dirname } from 'path'
+import { fileURLToPath } from 'url'
+import { spawn } from 'child_process'
 import { release } from 'os'
 import { getDb } from '../db'
 import { getLogDir } from '../logs'
@@ -38,6 +40,7 @@ export async function buildDiagnosticBundle(): Promise<BundleResult> {
       writeWorkspaceManifest(tempDir),
       writeDbDump(tempDir),
       writeServiceHealth(tempDir),
+      writeBrainDoctorOutput(tempDir),
     ])
 
     await zipDir(tempDir, outPath)
@@ -202,6 +205,63 @@ function writeServiceHealth(dir: string): Promise<void> {
     }
     resolve()
   })
+}
+
+function writeBrainDoctorOutput(dir: string): Promise<void> {
+  return new Promise((resolve) => {
+    const scriptPath = resolveBrainDoctorScript()
+    if (!scriptPath) {
+      resolve()
+      return
+    }
+
+    const chunks: Buffer[] = []
+    let settled = false
+    const settle = () => {
+      if (settled) return
+      settled = true
+      const raw = Buffer.concat(chunks).toString('utf8').trim()
+      try {
+        const parsed = JSON.parse(raw)
+        writeJson(join(dir, 'brain-doctor.json'), parsed)
+      } catch {
+        if (raw.length > 0) {
+          writeFileSync(join(dir, 'brain-doctor.json'), JSON.stringify({ raw }, null, 2) + '\n')
+        }
+      }
+      resolve()
+    }
+
+    const timer = setTimeout(settle, 30_000)
+
+    let proc
+    try {
+      proc = spawn(process.execPath, [scriptPath, '--json'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 30_000,
+      })
+    } catch {
+      clearTimeout(timer)
+      resolve()
+      return
+    }
+
+    proc.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
+    proc.stderr?.on('data', () => {})
+    proc.once('error', () => { clearTimeout(timer); settle() })
+    proc.once('close', () => { clearTimeout(timer); settle() })
+  })
+}
+
+function resolveBrainDoctorScript(): string | null {
+  if (app.isPackaged) {
+    const packaged = join(process.resourcesPath, 'brain-doctor.mjs')
+    return existsSync(packaged) ? packaged : null
+  }
+  const __filename = fileURLToPath(import.meta.url)
+  const __dirname = dirname(__filename)
+  const dev = join(__dirname, '..', '..', '..', 'scripts', 'brain-doctor.mjs')
+  return existsSync(dev) ? dev : null
 }
 
 // ---------------------------------------------------------------------------
