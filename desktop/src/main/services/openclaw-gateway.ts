@@ -5,6 +5,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { dirname, join } from 'path'
 import { allocatePort } from '../ports'
 import { openLogStream } from '../logs'
+import { getProviderKey } from '../provider-keys'
 import { resolveBundledNode } from './node-runtime'
 import { serviceManager } from './service-manager'
 
@@ -25,6 +26,7 @@ export async function startBundledOpenClaw(): Promise<void> {
   const workspaceDir = join(stateDir, 'workspace')
   ensureSeededConfig(configPath)
   ensureGatewayAuthToken(configPath)
+  migrateInvalidGoogleProviderConfig(configPath)
   await ensureWorkspaceBootstrap({
     nodePath,
     scriptPath,
@@ -39,10 +41,7 @@ export async function startBundledOpenClaw(): Promise<void> {
     name: 'openclawGateway',
     command: nodePath,
     args: [scriptPath, 'gateway', '--port', String(port)],
-    env: {
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-    },
+    env: buildOpenClawEnv({ stateDir, configPath }),
     port,
     healthCheckUrl: `http://127.0.0.1:${port}/health`,
     healthCheckTimeoutMs: 30_000,
@@ -91,15 +90,6 @@ export function applyGeminiKeyToOpenClawConfig(geminiKey: string): boolean {
   }
 
   const before = JSON.stringify(parsed)
-
-  const models = (parsed.models as Record<string, unknown> | undefined) ?? {}
-  const providers = (models.providers as Record<string, unknown> | undefined) ?? {}
-  const google = (providers.google as Record<string, unknown> | undefined) ?? {}
-  google.apiKey = geminiKey
-  providers.google = google
-  models.providers = providers
-  if (typeof models.mode !== 'string') models.mode = 'merge'
-  parsed.models = models
 
   const agents = (parsed.agents as Record<string, unknown> | undefined) ?? {}
   const defaults = (agents.defaults as Record<string, unknown> | undefined) ?? {}
@@ -209,6 +199,49 @@ function resolveConfigTemplate(): string | null {
   }
   const dev = join(__dirname, '..', '..', 'resources', relative)
   return existsSync(dev) ? dev : null
+}
+
+function buildOpenClawEnv(params: {
+  stateDir: string
+  configPath: string
+}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: params.stateDir,
+    OPENCLAW_CONFIG_PATH: params.configPath,
+  }
+  if (!env.GEMINI_API_KEY) {
+    const stored = getProviderKey('gemini')
+    if (stored) env.GEMINI_API_KEY = stored
+  }
+  return env
+}
+
+function migrateInvalidGoogleProviderConfig(configPath: string): void {
+  if (!existsSync(configPath)) return
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>
+  } catch {
+    return
+  }
+  const models = parsed.models as Record<string, unknown> | undefined
+  if (!models) return
+  const providers = models.providers as Record<string, unknown> | undefined
+  if (!providers) return
+  const google = providers.google as Record<string, unknown> | undefined
+  if (!google) return
+  const hasOnlyApiKey =
+    Object.keys(google).length === 1 && typeof google.apiKey === 'string'
+  if (!hasOnlyApiKey) return
+  delete providers.google
+  if (Object.keys(providers).length === 0) {
+    delete models.providers
+  }
+  if (Object.keys(models).length === 0) {
+    delete parsed.models
+  }
+  writeFileSync(configPath, JSON.stringify(parsed, null, 2) + '\n', { mode: 0o600 })
 }
 
 // Mints a random gateway token on first launch and persists it under
