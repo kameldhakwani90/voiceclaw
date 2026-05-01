@@ -323,10 +323,19 @@ export class RelaySession {
         return
       }
 
-      this.tracer.endToolCall(callId, result)
-      this.emitToolCompleted(callId, "ask_brain", result)
-      this.send({ type: "brain.result", callId, query, result })
-      this.adapter?.sendToolResult(callId, result)
+      const brainErrorMsg = extractBrainError(result)
+      if (brainErrorMsg !== null) {
+        logError(`[session:${this.id}] ask_brain (blocking) returned error payload:`, brainErrorMsg)
+        this.tracer.endToolCall(callId, result, brainErrorMsg)
+        this.emitToolFailed(callId, "ask_brain", brainErrorMsg, false)
+        this.send({ type: "brain.result", callId, query, error: result })
+        this.adapter?.sendToolResult(callId, result)
+      } else {
+        this.tracer.endToolCall(callId, result)
+        this.emitToolCompleted(callId, "ask_brain", result)
+        this.send({ type: "brain.result", callId, query, result })
+        this.adapter?.sendToolResult(callId, result)
+      }
     }).catch((err) => {
       const message = err instanceof Error ? err.message : "brain agent call failed"
       logError(`[session:${this.id}] ask_brain (blocking) error:`, message)
@@ -417,14 +426,25 @@ export class RelaySession {
         return
       }
 
-      this.tracer.endToolCall(callId, result)
-      this.emitToolCompleted(callId, "ask_brain", result)
+      const brainErrorMsg = extractBrainError(result)
+      if (brainErrorMsg !== null) {
+        logError(`[session:${this.id}] ask_brain returned error payload:`, brainErrorMsg)
+        this.tracer.endToolCall(callId, result, brainErrorMsg)
+        this.emitToolFailed(callId, "ask_brain", brainErrorMsg, false)
+        this.send({ type: "brain.result", callId, query, error: result })
+        this.adapter?.injectContext(
+          `[Brain agent failed for query: "${query}": ${brainErrorMsg}]\nLet the user know the search didn't work and offer to try again.`
+        )
+      } else {
+        this.tracer.endToolCall(callId, result)
+        this.emitToolCompleted(callId, "ask_brain", result)
 
-      this.send({ type: "brain.result", callId, query, result })
+        this.send({ type: "brain.result", callId, query, result })
 
-      this.adapter?.injectContext(
-        `[Brain agent result for query: "${query}"]\n${result}\n\nPlease share this information with the user naturally.`
-      )
+        this.adapter?.injectContext(
+          `[Brain agent result for query: "${query}"]\n${result}\n\nPlease share this information with the user naturally.`
+        )
+      }
     }).catch((err) => {
       const message = err instanceof Error ? err.message : "brain agent call failed"
       logError(`[session:${this.id}] ask_brain error:`, message)
@@ -825,4 +845,16 @@ async function retryTranscriptSync(opts: {
     }
   }
   throw new Error("transcript sync loop exited without result")
+}
+
+function extractBrainError(result: string): string | null {
+  try {
+    const parsed = JSON.parse(result) as Record<string, unknown>
+    if (parsed && typeof parsed === "object" && typeof parsed.error === "string") {
+      return parsed.error
+    }
+  } catch {
+    // not JSON
+  }
+  return null
 }

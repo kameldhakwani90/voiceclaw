@@ -80,13 +80,35 @@ export async function askBrain(
     if (controller.signal.aborted) {
       return JSON.stringify({ error: "Brain agent request aborted" })
     }
-    throw err
+    const errName = err instanceof Error ? err.constructor.name : "UnknownError"
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const friendlyReason = buildFetchFailedReason(errMsg, url)
+    logError(`[brain] fetch failed (${errName}): ${errMsg}`)
+    return JSON.stringify({
+      error: friendlyReason,
+      upstream: {
+        errorClass: errName,
+        errorMessage: errMsg,
+        url,
+        openclawLogHint: "tail -50 ~/Library/Logs/VoiceClaw/openclaw-gateway.log",
+      },
+      durationMs: Date.now() - requestStart,
+    })
   }
 
   if (!response.ok) {
     const text = await response.text()
     logError(`[brain] Error ${response.status}: ${text.substring(0, 200)}`)
-    return JSON.stringify({ error: `Brain agent returned ${response.status}` })
+    return JSON.stringify({
+      error: `Brain agent returned ${response.status}`,
+      upstream: {
+        httpStatus: response.status,
+        httpStatusText: response.statusText,
+        bodyExcerpt: text.substring(0, 500) || null,
+        openclawLogHint: "tail -50 ~/Library/Logs/VoiceClaw/openclaw-gateway.log",
+      },
+      durationMs: Date.now() - requestStart,
+    })
   }
 
   // Parse SSE stream
@@ -167,6 +189,32 @@ export async function askBrain(
   }
 
   cleanup()
+  const durationMs = Date.now() - requestStart
   log(`[brain] Response: ${fullResponse.substring(0, 100)}...`)
-  return fullResponse || JSON.stringify({ error: "Empty response from brain agent" })
+  if (!fullResponse) {
+    return JSON.stringify({
+      error: "Empty response from brain agent",
+      upstream: {
+        httpStatus: response.status,
+        httpStatusText: response.statusText,
+        bodyExcerpt: null,
+        openclawLogHint: "tail -50 ~/Library/Logs/VoiceClaw/openclaw-gateway.log",
+      },
+      durationMs,
+    })
+  }
+  return fullResponse
+}
+
+function buildFetchFailedReason(errMsg: string, url: string): string {
+  if (errMsg.includes("ECONNREFUSED")) {
+    return `Brain unreachable: ECONNREFUSED at ${url} — openclaw gateway not running. Run: yarn brain:doctor`
+  }
+  if (errMsg.includes("ECONNRESET")) {
+    return `Brain unreachable: ECONNRESET at ${url} — connection dropped. Run: yarn brain:doctor`
+  }
+  if (errMsg.includes("ETIMEDOUT") || errMsg.includes("timed out")) {
+    return `Brain unreachable: timeout connecting to ${url}. Run: yarn brain:doctor`
+  }
+  return `Brain unreachable: ${errMsg} at ${url}. Run: yarn brain:doctor`
 }

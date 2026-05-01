@@ -1,0 +1,35 @@
+name: Brain E2E
+
+on:
+  pull_request:
+    paths:
+      - 'relay-server/**'
+      - 'desktop/src/main/services/**'
+      - 'vendor/openclaw/**'
+      - 'desktop/scripts/build-openclaw-bundle.mjs'
+
+jobs:
+  brain-e2e-real:
+    name: brain:e2e:real
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run brain:e2e:real
+        env:
+          GEMINI_E2E_API_KEY: ${{ secrets.GEMINI_E2E_API_KEY }}
+          LANGFUSE_DISABLED: 'true'
+          NODE_ENV: 'test'
+        run: yarn workspace relay-server vitest run test/brain-e2e.test.ts

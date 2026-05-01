@@ -33,6 +33,7 @@ If our team asks for more detail, you can export a bundle with one click:
 | Database schema | Table definitions only — no messages or history |
 | List of configured providers | Provider names only — no key values |
 | Service health snapshot | Relay and OpenClaw status at export time |
+| Brain doctor report | PASS/FAIL checklist for the 10 brain health checks |
 
 ### What's never included
 
@@ -42,6 +43,43 @@ If our team asks for more detail, you can export a bundle with one click:
 - Audio recordings
 
 The bundle is a plain ZIP — no encryption, no automatic upload. It goes wherever you send it.
+
+## Brain / AI memory problems
+
+The brain agent (AI memory and task layer) can fail in a few ways. When it does, VoiceClaw shows a specific message in the chat telling you what went wrong and what to try.
+
+### Error messages you may see
+
+**`Brain unreachable: ECONNREFUSED at http://127.0.0.1:… — openclaw gateway not running`**
+
+The local openclaw gateway process has stopped. Quit and relaunch VoiceClaw — it will restart the gateway automatically.
+
+**`Empty response from brain agent`** with a "What went wrong" detail panel
+
+The gateway responded but returned no content. Expand the detail panel in the chat bubble to see the HTTP status, response body excerpt, and a log hint. Check `~/Library/Logs/VoiceClaw/openclaw-gateway.log` for the root cause (common: Gemini API key expired, quota exceeded, or model name changed in config).
+
+### Run the brain doctor
+
+From the repo root (developer mode) you can run a 10-point diagnostic:
+
+```sh
+yarn brain:doctor
+```
+
+Each check prints `PASS`, `FAIL`, or `SKIP` with an actionable next step if something is wrong. The same output is included automatically in the diagnostic bundle (see above) as `brain-doctor.json`.
+
+The 10 checks are:
+
+1. Bundled openclaw script exists
+2. Bundled node binary exists and is v22.12+
+3. OpenClaw config file exists in app data
+4. Config has valid gateway mode, Gemini API key, and agent model
+5. Workspace directory has all required files (SOUL.md, AGENTS.md, etc.)
+6. OpenClaw process is running and `/health` returns 200
+7. Relay process is running and `/health` returns 200
+8. OpenClaw is reachable on the port it advertised
+9. Direct call to openclaw's completions endpoint returns a non-empty response
+10. Gemini API key is accepted by Google's API
 
 ## Common problems
 

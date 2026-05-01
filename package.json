@@ -39,7 +39,8 @@
     "dev:tracing-collector": "cd tracing-collector && yarn dev",
     "dev:tracing-ui": "cd tracing-ui && yarn dev",
     "build:tracing-collector": "cd tracing-collector && yarn build",
-    "build:tracing-ui": "cd tracing-ui && yarn build"
+    "build:tracing-ui": "cd tracing-ui && yarn build",
+    "brain:doctor": "node desktop/scripts/brain-doctor.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
