@@ -84,6 +84,7 @@ export default defineConfig({
             { slug: 'desktop-app' },
             { slug: 'desktop/onboarding', label: 'Desktop: onboarding wizard' },
             { slug: 'desktop/call-bar', label: 'Desktop: floating call bar' },
+            { slug: 'desktop/keyboard-shortcuts', label: 'Desktop: keyboard shortcuts' },
             { slug: 'desktop/volume-control', label: 'Desktop: agent volume control' },
             { slug: 'desktop/chat-actions', label: 'Desktop: chat actions (right-click menu)' },
             { slug: 'desktop/time-grouping', label: 'Desktop: time grouping in chat' },

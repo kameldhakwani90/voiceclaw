@@ -1,0 +1,110 @@
+---
+title: Keyboard shortcuts
+description: Recommended desktop shortcut model for global call control, including mute, hang up, optional start-call behavior, and implementation constraints.
+---
+
+import { Aside } from '@astrojs/starlight/components'
+
+VoiceClaw should treat global call shortcuts as a small, deliberate control layer rather than a full command palette. The user is often inside another app while talking, so every global shortcut has to be easy enough to remember, hard enough to hit accidentally, and tolerant of macOS or app-level conflicts.
+
+## Recommendation
+
+Use a VoiceClaw-specific global layer for active-call controls:
+
+| Action | macOS label | Electron accelerator | Default behavior |
+| --- | --- | --- | --- |
+| Toggle mic mute | `Command+Option+Shift+M` | `CommandOrControl+Alt+Shift+M` | Register globally only while a call is active. |
+| End call | `Command+Option+Shift+H` | `CommandOrControl+Alt+Shift+H` | Register globally only while a call is active. |
+| Start call | `Command+Option+Shift+C` | `CommandOrControl+Alt+Shift+C` | Off by default. Offer as an opt-in global shortcut. |
+
+This keeps the global shortcuts mnemonic: `M` for mute, `H` for hang up, `C` for call. The extra `Option+Shift` modifiers make the shortcuts less likely to collide with the frontmost app than the meeting-style `Command+Shift+M` and `Command+Shift+H` chords.
+
+Inside the focused VoiceClaw window, use lighter local aliases:
+
+| Action | Focused VoiceClaw shortcut | Notes |
+| --- | --- | --- |
+| Toggle mic mute | `Command+Shift+M` | Matches Microsoft Teams and keeps `Command+M` free for the macOS minimize convention. |
+| End call | `Command+Shift+H` | Familiar from Teams and Slack huddles, but not safe enough as a global default. |
+| Start call | No default focused alias | Prefer the visible call button unless the user opts into the global call shortcut. |
+
+<Aside type="caution" title="Do not keep Command+M for mute">
+`Command+M` is a standard macOS window command for minimizing the front window. VoiceClaw can keep any existing behavior temporarily for compatibility, but the shortcut model should move mute to `Command+Shift+M` locally and `Command+Option+Shift+M` globally.
+</Aside>
+
+## Why not meeting-style globals?
+
+`Command+Shift+M` is the most natural mute shortcut because Teams uses it on macOS, while Zoom uses `Command+Shift+A` and Slack uses `Command+Shift+Space` for huddle mute. For a focused app shortcut, matching Teams is reasonable. For a global shortcut, it is too likely to interfere with the app the user is actively using.
+
+`Command+Shift+H` is familiar for ending or leaving a call because Teams uses it for end call and Slack uses it for huddles. It is still a poor global default because macOS and frontmost apps already assign `Command+Shift` chords for navigation, folders, huddles, and other active work. Ending a call globally should require the VoiceClaw-specific modifier layer.
+
+## Start and stop behavior
+
+End call can be global by default because it only exists while a call is active and it moves the user toward a safer privacy state. Start call is different: a global start shortcut can accidentally open the mic while the user is in another app.
+
+Recommended behavior:
+
+1. Register mute and end-call globals only after the renderer reports `callActive = true`.
+2. Unregister both immediately when the call ends, the app quits, or global shortcuts are disabled in settings.
+3. Keep global start call disabled by default.
+4. If the user enables global start, bind `Command+Option+Shift+C` as a toggle:
+   - When idle, start the call for the currently selected conversation.
+   - When active, end the call.
+   - Do not start if onboarding is incomplete, microphone permission is denied, settings are open in a blocking state, or no usable conversation context exists.
+5. Surface registration failures in Settings instead of silently pretending the shortcut is available.
+
+## Push-to-talk and quick-talk
+
+Do not ship global push-to-talk through Electron `globalShortcut`.
+
+Push-to-talk needs both key-down and key-up semantics. Electron's global shortcut API calls a callback when the accelerator is pressed, but it is not a full low-level key event stream. A global `Space` or `Option+Space` shortcut also conflicts with typing, Quick Look, input-source behavior, and meeting apps.
+
+If VoiceClaw adds quick-talk later, implement it as a focused-window feature first:
+
+| Pattern | Recommendation |
+| --- | --- |
+| Hold to temporarily unmute | `Option+Space` only when the VoiceClaw window is focused, the user is already muted, and focus is not inside a text input. |
+| Tap to mute/unmute | Keep `Command+Shift+M` local and `Command+Option+Shift+M` global. |
+| Global hold-to-talk | Defer until there is a native macOS event-tap implementation and a clear Accessibility-permission flow. |
+
+## Electron constraints
+
+Electron's global shortcut API is main-process only and only works after `app` is ready. Registration returns a boolean, and registration can fail when another app or the operating system already owns the accelerator. Electron intentionally does not make apps fight for the same global shortcut.
+
+Implementation direction:
+
+1. Add a small main-process shortcut owner, for example `desktop/src/main/call-shortcuts.ts`.
+2. Register active-call accelerators from main when `setCallActive(true)` runs.
+3. Reuse the existing call-bar command path for renderer actions:
+   - global mute sends a renderer IPC event that calls the same `toggleMute()` path as the mute button and call-bar menu.
+   - global end call sends a renderer IPC event that calls the same `endCall()` path as the hang-up button and call-bar menu.
+   - optional global start call asks the focused main window to run `startCall()` only when the renderer reports it is safe.
+4. Store enabled/disabled state and custom accelerator strings in settings before exposing customization.
+5. On registration failure, leave the shortcut disabled, show the failed accelerator in Settings, and keep focused-window shortcuts working.
+6. Unregister shortcuts on call end and `will-quit`.
+
+Use Electron accelerator strings in code, but show native labels in the UI. For cross-platform accelerator strings, use `Alt` rather than `Option`; Electron maps `Alt` to `Option` on macOS.
+
+<Aside type="note" title="Media keys">
+Avoid media keys for call control. Electron documents additional macOS Accessibility-client requirements for media accelerators such as `MediaPlayPause`, and those keys already have strong system audio expectations.
+</Aside>
+
+## macOS constraints
+
+Apple's guidance is to respect standard shortcuts and avoid repurposing shortcuts people already know. For VoiceClaw, that means:
+
+- Do not use `Command+M` for mute in the recommended model; it conflicts with minimize.
+- Do not use `Command+Space`, `Option+Command+Space`, or other Command+Space variants; Spotlight, Character Viewer, and input-source behavior already live there.
+- Do not use `Control+Command+F`; it is the fullscreen shortcut.
+- Prefer alphabetic primary keys for custom shortcuts, because punctuation and number keys can vary across keyboard layouts.
+- Use `Option` sparingly. In this case it is justified because global call controls are power-user commands that run while another app is focused.
+
+## Researched patterns
+
+- [Apple Human Interface Guidelines: Keyboards](https://developer.apple.com/design/human-interface-guidelines/keyboards/) recommend respecting standard shortcuts, using Command as the main custom-shortcut modifier, using Shift as a related secondary modifier, and avoiding Control for ordinary custom shortcuts.
+- [Apple Support: Mac keyboard shortcuts](https://support.apple.com/en-us/102650) documents common system shortcuts including `Command+M`, `Command+Space`, `Control+Command+Space`, `Control+Command+F`, and `Control+Command+Q`.
+- [Electron: globalShortcut](https://www.electronjs.org/docs/latest/api/global-shortcut/) documents main-process global registration, registration failure when shortcuts are already taken, and macOS Accessibility constraints for media keys.
+- [Electron: Keyboard Shortcuts](https://www.electronjs.org/docs/latest/tutorial/keyboard-shortcuts) documents accelerator strings, cross-platform modifiers, and a macOS globalShortcut keyboard-layout caveat.
+- [Zoom: hot keys and keyboard shortcuts](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0067050) uses `Command+Shift+A` for mute on macOS and lets users opt shortcuts into global behavior.
+- [Zoom: push-to-talk](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0063245) keeps push-to-talk tied to holding Space while the Zoom window is in focus.
+- [Microsoft Teams keyboard shortcuts](https://support.microsoft.com/en-us/office/keyboard-shortcuts-for-microsoft-teams-2e8e2a70-e8d8-4a19-949b-4c36dd5292d2) uses `Command+Shift+M` for mute, `Command+Shift+H` for end call, and `Option+Space` for temporary unmute on macOS.
+- [Slack keyboard shortcuts](https://slack.com/help/articles/201374536-Slack-keyboard-shortcuts) uses `Command+Shift+Space` for huddle mute and `Command+Shift+H` to start, join, leave, or end a huddle.
