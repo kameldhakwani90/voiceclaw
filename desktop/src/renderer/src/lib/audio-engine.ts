@@ -96,8 +96,6 @@ export class AudioEngine {
     source.buffer = buffer
     source.connect(this.gainNode)
 
-    // Pre-schedule on the audio thread so contiguous chunks stitch sample-accurately.
-    // Driving .start() from main-thread onended leaves an audible silence gap.
     const startAt = Math.max(this.audioCtx.currentTime, this.nextStartTime)
     source.start(startAt)
     this.nextStartTime = startAt + buffer.duration
