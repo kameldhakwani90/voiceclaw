@@ -132,7 +132,17 @@ function captureVoice(apiKey, voice) {
         case "response.done":
         case "response.audio.done":
         case "response.output_audio.done":
-          if (frames.length > 0) finish(Buffer.concat(frames))
+          if (frames.length > 0) {
+            finish(Buffer.concat(frames))
+          } else {
+            // Don't sit on the timeout — the model finished without speaking
+            // (e.g., it refused, or the prompt was rejected). Surface the
+            // failure now so the caller can retry or flag the voice.
+            finish(
+              null,
+              new Error(`response completed with no audio (voice=${voice}, event=${event.type})`),
+            )
+          }
           return
         case "error":
           finish(null, new Error(formatXaiError(event)))
