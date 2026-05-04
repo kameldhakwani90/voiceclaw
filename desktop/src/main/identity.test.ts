@@ -123,7 +123,7 @@ describe('readAgentIdentity', () => {
   })
 })
 
-describe('getCachedVoicePreview', () => {
+describe('getBundledVoicePreview', () => {
   let fetchCalls: { url: string; init?: RequestInit }[] = []
 
   beforeEach(() => {
@@ -139,7 +139,7 @@ describe('getCachedVoicePreview', () => {
       net: {
         fetch: async (url: string, init?: RequestInit) => {
           fetchCalls.push({ url, init })
-          throw new Error('net.fetch must NOT be called from getCachedVoicePreview')
+          throw new Error('net.fetch must NOT be called from getBundledVoicePreview')
         },
       },
     }))
@@ -156,8 +156,8 @@ describe('getCachedVoicePreview', () => {
       '/tmp/voiceclaw-app-path/resources/voice-previews/gemini/Zephyr.wav',
       wavBytes,
     )
-    const { getCachedVoicePreview } = await import('./identity')
-    const result = await getCachedVoicePreview({ voice: 'Zephyr' })
+    const { getBundledVoicePreview } = await import('./identity')
+    const result = await getBundledVoicePreview({ voice: 'Zephyr' })
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.mimeType).toBe('audio/wav')
@@ -169,8 +169,8 @@ describe('getCachedVoicePreview', () => {
   it('reads bundled xAI WAVs without ever hitting the network', async () => {
     const wavBytes = 'PRETEND-XAI-WAV-BYTES'
     fileSystem.set('/tmp/voiceclaw-app-path/resources/voice-previews/xai/eve.wav', wavBytes)
-    const { getCachedVoicePreview } = await import('./identity')
-    const result = await getCachedVoicePreview({ voice: 'eve' })
+    const { getBundledVoicePreview } = await import('./identity')
+    const result = await getBundledVoicePreview({ voice: 'eve' })
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.mimeType).toBe('audio/wav')
@@ -182,23 +182,23 @@ describe('getCachedVoicePreview', () => {
   it('does not write any files (no userData lazy cache)', async () => {
     fileSystem.set('/tmp/voiceclaw-app-path/resources/voice-previews/gemini/Puck.wav', 'a')
     fileSystem.set('/tmp/voiceclaw-app-path/resources/voice-previews/xai/rex.wav', 'b')
-    const { getCachedVoicePreview } = await import('./identity')
-    await getCachedVoicePreview({ voice: 'Puck' })
-    await getCachedVoicePreview({ voice: 'rex' })
+    const { getBundledVoicePreview } = await import('./identity')
+    await getBundledVoicePreview({ voice: 'Puck' })
+    await getBundledVoicePreview({ voice: 'rex' })
     expect(writes.filter((w) => w.path.includes('voice-previews'))).toHaveLength(0)
   })
 
   it('returns an error when a bundled preview is missing', async () => {
-    const { getCachedVoicePreview } = await import('./identity')
-    const result = await getCachedVoicePreview({ voice: 'Aoede' })
+    const { getBundledVoicePreview } = await import('./identity')
+    const result = await getBundledVoicePreview({ voice: 'Aoede' })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toMatch(/Aoede/)
     expect(fetchCalls).toHaveLength(0)
   })
 
   it('returns an error for an unknown voice', async () => {
-    const { getCachedVoicePreview } = await import('./identity')
-    const result = await getCachedVoicePreview({ voice: 'NotAVoice' })
+    const { getBundledVoicePreview } = await import('./identity')
+    const result = await getBundledVoicePreview({ voice: 'NotAVoice' })
     expect(result.ok).toBe(false)
     expect(fetchCalls).toHaveLength(0)
   })

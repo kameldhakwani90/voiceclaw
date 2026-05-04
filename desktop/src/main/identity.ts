@@ -61,7 +61,7 @@ export type VoicePreviewResult =
 // no network, no API key, no quota concerns. The samples are generated
 // once via the desktop/scripts/generate-<provider>-voice-previews.mjs
 // scripts and committed to the repo.
-export async function getCachedVoicePreview(params: {
+export async function getBundledVoicePreview(params: {
   voice: string
 }): Promise<VoicePreviewResult> {
   const provider = providerForVoice(params.voice)

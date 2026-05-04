@@ -18,7 +18,7 @@ import { buildDiagnosticBundle } from './services/diagnostic-bundle'
 import {
   type AgentIdentity,
   readAgentIdentity,
-  getCachedVoicePreview,
+  getBundledVoicePreview,
   speakGreetingPreview,
   writeAgentIdentity,
 } from './identity'
@@ -546,7 +546,7 @@ export function registerIpcHandlers() {
   ipcMain.handle(
     'identity:getVoicePreview',
     async (_e, params: { voice: string }) => {
-      return getCachedVoicePreview({ voice: params.voice })
+      return getBundledVoicePreview({ voice: params.voice })
     },
   )
 

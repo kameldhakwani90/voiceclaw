@@ -1,16 +1,15 @@
 #!/usr/bin/env node
-// Pre-recorded Gemini voice samples for the Settings voice picker.
-//
-// We bundle the 8 Gemini voices as static WAVs so the desktop app can
-// preview them with zero runtime calls to the Gemini TTS endpoint —
-// that's important because the previous lazy-cache implementation
-// hit users with 429 quota errors on first click. See NAN-715.
+// Generates the bundled Gemini voice samples under
+// `desktop/resources/voice-previews/gemini/<Voice>.wav`. The desktop
+// app reads these at runtime so the Settings preview button never hits
+// the network.
 //
 // Usage:
 //   GEMINI_API_KEY=... node desktop/scripts/generate-gemini-voice-previews.mjs
 //
-// Re-run only if the voice list or model changes. The runtime path
-// (Settings) reads straight from the bundled WAVs — no network.
+// Pass `--force` to overwrite existing WAVs (e.g. after the prompt or
+// model changes). Without it, voices whose WAV already exists are
+// skipped — useful for resuming after a partial run.
 
 import { mkdir, stat, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
@@ -56,12 +55,13 @@ async function main() {
     )
     process.exit(2)
   }
+  const force = process.argv.includes('--force')
   await mkdir(outDir, { recursive: true })
   let firstRequest = true
   for (const voice of VOICES) {
     const path = resolve(outDir, `${voice}.wav`)
-    if (await fileExists(path)) {
-      console.log(`[gemini-previews] ${voice} … cached, skip`)
+    if (!force && (await fileExists(path))) {
+      console.log(`[gemini-previews] ${voice} … exists, skip (pass --force to overwrite)`)
       continue
     }
     if (!firstRequest) await sleep(INTER_REQUEST_DELAY_MS)
@@ -142,9 +142,23 @@ function parseSampleRate(mimeType) {
 }
 
 function parseRetryDelayMs(body) {
-  // Gemini 429 bodies include a `RetryInfo` block with retryDelay like "31s".
-  const match = body.match(/"retryDelay"\s*:\s*"(\d+)s"/i)
-  return match ? Number(match[1]) * 1000 : null
+  // Gemini 429 bodies look like:
+  //   { "error": { "details": [{ "@type": ".../RetryInfo", "retryDelay": "31s" }, ...] } }
+  let parsed
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return null
+  }
+  const details = parsed?.error?.details
+  if (!Array.isArray(details)) return null
+  for (const d of details) {
+    if (typeof d?.retryDelay === "string") {
+      const match = d.retryDelay.match(/^(\d+(?:\.\d+)?)s$/)
+      if (match) return Math.round(Number(match[1]) * 1000)
+    }
+  }
+  return null
 }
 
 async function fileExists(path) {
