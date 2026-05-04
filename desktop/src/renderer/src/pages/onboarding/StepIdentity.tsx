@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { StepFrame } from './StepFrame'
 import { identityApi, type OnboardingPayload } from '../../lib/onboarding-api'
+import { decodeVoicePreviewAudio } from '../../lib/voice-preview'
 
 const GEMINI_VOICES = [
   { id: 'Aoede', label: 'Aoede (F) — warm, conversational', preview: "Hi, I'm here." },
@@ -37,23 +38,33 @@ export function StepIdentity({
   const [voice, setVoice] = useState(initialIdentity.voice ?? DEFAULT_VOICE)
   const [previewing, setPreviewing] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState('')
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const clipRef = useRef<{ audio: HTMLAudioElement; revoke: () => void } | null>(null)
+  const previewTokenRef = useRef(0)
+
+  const stopActiveClip = () => {
+    const clip = clipRef.current
+    if (!clip) return
+    try {
+      clip.audio.pause()
+    } catch {
+      // ignore
+    }
+    clip.revoke()
+    clipRef.current = null
+  }
 
   useEffect(() => {
     return () => {
-      const audio = audioRef.current
-      if (audio) {
-        try {
-          audio.pause()
-        } catch {
-          // ignore
-        }
-      }
+      // Bump the token so any in-flight `handlePreview` ignores its result.
+      previewTokenRef.current += 1
+      stopActiveClip()
     }
   }, [])
 
   const handlePreview = async (voiceId: string) => {
     if (previewMode) return
+    const token = ++previewTokenRef.current
+    stopActiveClip()
     setPreviewError('')
     setPreviewing(voiceId)
     try {
@@ -61,6 +72,7 @@ export function StepIdentity({
         voice: voiceId,
         text: `Hi, I'm ${name.trim() || DEFAULT_NAME}.`,
       })
+      if (token !== previewTokenRef.current) return
       if (!result.ok) {
         console.error('[voice-preview] api error', result.error)
         setPreviewError(result.error)
@@ -68,22 +80,30 @@ export function StepIdentity({
         return
       }
       console.info('[voice-preview] got audio', { voiceId, mimeType: result.mimeType, bytes: result.audioBase64.length })
-      const audio = decodeAudio(result.audioBase64, result.mimeType)
-      audioRef.current = audio
-      audio.onended = () => setPreviewing((p) => (p === voiceId ? null : p))
-      audio.onerror = (e) => {
-        console.error('[voice-preview] audio element error', e, 'mimeType:', result.mimeType)
-        setPreviewError(`Audio playback failed (${result.mimeType}). Try a different voice.`)
+      const clip = decodeVoicePreviewAudio(result.audioBase64, result.mimeType)
+      clipRef.current = clip
+      const finish = () => {
+        if (clipRef.current === clip) {
+          clip.revoke()
+          clipRef.current = null
+        }
         setPreviewing((p) => (p === voiceId ? null : p))
       }
+      clip.audio.onended = finish
+      clip.audio.onerror = (e) => {
+        console.error('[voice-preview] audio element error', e, 'mimeType:', result.mimeType)
+        setPreviewError(`Audio playback failed (${result.mimeType}). Try a different voice.`)
+        finish()
+      }
       try {
-        await audio.play()
+        await clip.audio.play()
       } catch (err) {
         console.error('[voice-preview] audio.play() rejected', err)
         setPreviewError(err instanceof Error ? err.message : 'Could not play audio.')
-        setPreviewing(null)
+        finish()
       }
     } catch (err) {
+      if (token !== previewTokenRef.current) return
       console.error('[voice-preview] handler threw', err)
       setPreviewError(err instanceof Error ? err.message : 'Preview failed.')
       setPreviewing(null)
@@ -250,54 +270,3 @@ function VoiceRow({
   )
 }
 
-function decodeAudio(base64: string, mimeType: string): HTMLAudioElement {
-  if (mimeType.startsWith('audio/L16') || mimeType.startsWith('audio/pcm')) {
-    const sampleRate = parseSampleRate(mimeType) ?? 24000
-    const wav = pcmToWav(base64, sampleRate)
-    const blob = new Blob([wav], { type: 'audio/wav' })
-    return new Audio(URL.createObjectURL(blob))
-  }
-  return new Audio(`data:${mimeType};base64,${base64}`)
-}
-
-function parseSampleRate(mimeType: string): number | null {
-  const match = mimeType.match(/rate=(\d+)/i)
-  return match ? Number(match[1]) : null
-}
-
-function pcmToWav(base64: string, sampleRate: number): ArrayBuffer {
-  const binary = atob(base64)
-  const pcm = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i += 1) pcm[i] = binary.charCodeAt(i)
-
-  const numChannels = 1
-  const bitsPerSample = 16
-  const byteRate = (sampleRate * numChannels * bitsPerSample) / 8
-  const blockAlign = (numChannels * bitsPerSample) / 8
-  const dataSize = pcm.length
-  const buffer = new ArrayBuffer(44 + dataSize)
-  const view = new DataView(buffer)
-
-  writeString(view, 0, 'RIFF')
-  view.setUint32(4, 36 + dataSize, true)
-  writeString(view, 8, 'WAVE')
-  writeString(view, 12, 'fmt ')
-  view.setUint32(16, 16, true)
-  view.setUint16(20, 1, true)
-  view.setUint16(22, numChannels, true)
-  view.setUint32(24, sampleRate, true)
-  view.setUint32(28, byteRate, true)
-  view.setUint16(32, blockAlign, true)
-  view.setUint16(34, bitsPerSample, true)
-  writeString(view, 36, 'data')
-  view.setUint32(40, dataSize, true)
-
-  new Uint8Array(buffer, 44).set(pcm)
-  return buffer
-}
-
-function writeString(view: DataView, offset: number, value: string) {
-  for (let i = 0; i < value.length; i += 1) {
-    view.setUint8(offset + i, value.charCodeAt(i))
-  }
-}

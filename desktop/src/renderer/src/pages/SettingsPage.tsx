@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UpdateState } from '../lib/db'
-import { Wifi, WifiOff, Eye, EyeOff } from 'lucide-react'
+import { Wifi, WifiOff, Eye, EyeOff, Play } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
 import { Select } from '../components/ui/Select'
 import { Toggle } from '../components/ui/Toggle'
 import { identityApi, onboarding } from '../lib/onboarding-api'
+import { decodeVoicePreviewAudio } from '../lib/voice-preview'
 import { useTheme, type Theme } from '../lib/use-theme'
 import { enumerateAudioDevices, type AudioDevice } from '../lib/audio-engine'
 import { getSetting, setSetting } from '../lib/db'
@@ -94,6 +95,15 @@ export function SettingsPage() {
   const [agentName, setAgentName] = useState('')
   const [agentDescription, setAgentDescription] = useState('')
   const identityLoadedRef = useRef(false)
+
+  // Voice preview playback (clicking ▶ on a voice card plays a sample
+  // without changing the selection). Errors render inline below the grid.
+  const [previewing, setPreviewing] = useState<string | null>(null)
+  const [previewError, setPreviewError] = useState('')
+  const previewClipRef = useRef<{ audio: HTMLAudioElement; revoke: () => void } | null>(null)
+  // Monotonic token used to invalidate stale in-flight preview requests
+  // when the user clicks another voice (or unmounts) before the IPC returns.
+  const previewTokenRef = useRef(0)
 
   // Privacy / telemetry
   const [telemetryEnabled, setTelemetryEnabled] = useState(true)
@@ -233,6 +243,74 @@ export function SettingsPage() {
       void setVoiceForProvider(providerForModel(model), v)
     }
   }, [model])
+
+  // Stop + release any in-flight preview clip on unmount.
+  useEffect(() => {
+    return () => {
+      previewTokenRef.current += 1
+      const clip = previewClipRef.current
+      if (clip) {
+        try {
+          clip.audio.pause()
+        } catch {
+          // ignore
+        }
+        clip.revoke()
+        previewClipRef.current = null
+      }
+    }
+  }, [])
+
+  const handleVoicePreview = useCallback(async (voiceId: string) => {
+    const token = ++previewTokenRef.current
+    // Stop + release the previous clip so re-clicking restarts cleanly and
+    // we don't leak the blob: URL backing a PCM preview.
+    const prev = previewClipRef.current
+    if (prev) {
+      try {
+        prev.audio.pause()
+      } catch {
+        // ignore
+      }
+      prev.revoke()
+      previewClipRef.current = null
+    }
+    setPreviewError('')
+    setPreviewing(voiceId)
+    try {
+      const result = await identityApi.getVoicePreview({ voice: voiceId })
+      if (token !== previewTokenRef.current) return
+      if (!result.ok) {
+        setPreviewError(result.error)
+        setPreviewing(null)
+        return
+      }
+      const clip = decodeVoicePreviewAudio(result.audioBase64, result.mimeType)
+      previewClipRef.current = clip
+      const finish = () => {
+        if (previewClipRef.current === clip) {
+          clip.revoke()
+          previewClipRef.current = null
+        }
+        setPreviewing((p) => (p === voiceId ? null : p))
+      }
+      clip.audio.onended = finish
+      clip.audio.onerror = () => {
+        setPreviewError(`Audio playback failed (${result.mimeType}).`)
+        finish()
+      }
+      try {
+        await clip.audio.play()
+      } catch (err) {
+        setPreviewError(err instanceof Error ? err.message : 'Could not play audio.')
+        finish()
+      }
+    } catch (err) {
+      if (token !== previewTokenRef.current) return
+      setPreviewError(err instanceof Error ? err.message : 'Preview failed.')
+      setPreviewing(null)
+    }
+  }, [])
 
   const updateVolume = useCallback((v: number) => {
     setVolume(v)
@@ -569,20 +647,55 @@ export function SettingsPage() {
         <Card className="p-4 space-y-4">
           <h3 className="text-sm font-semibold text-foreground">Voice</h3>
           <div className="grid grid-cols-2 gap-1.5">
-            {(model.startsWith('gemini-') ? GEMINI_VOICES : XAI_VOICES).map((v) => (
-              <button
-                key={v}
-                onClick={() => updateVoice(v)}
-                className={`rounded-md border px-3 py-2 text-sm text-left transition-colors
-                  ${voice === v ? 'border-primary bg-accent font-medium text-foreground' : 'border-input text-muted-foreground hover:bg-accent'}
-                `}
-              >
-                {model.startsWith('gemini-')
-                  ? GEMINI_VOICE_LABELS[v as typeof GEMINI_VOICES[number]]
-                  : XAI_VOICE_LABELS[v as typeof XAI_VOICES[number]]}
-              </button>
-            ))}
+            {(model.startsWith('gemini-') ? GEMINI_VOICES : XAI_VOICES).map((v) => {
+              const isGemini = model.startsWith('gemini-')
+              const label = isGemini
+                ? GEMINI_VOICE_LABELS[v as typeof GEMINI_VOICES[number]]
+                : XAI_VOICE_LABELS[v as typeof XAI_VOICES[number]]
+              const selected = voice === v
+              const isPlaying = previewing === v
+              return (
+                <div
+                  key={v}
+                  className={`flex items-stretch gap-1 rounded-md border transition-colors
+                    ${selected ? 'border-primary bg-accent' : 'border-input'}
+                  `}
+                >
+                  <button
+                    onClick={() => updateVoice(v)}
+                    className={`flex-1 rounded-l-md px-3 py-2 text-left text-sm transition-colors
+                      ${selected ? 'font-medium text-foreground' : 'text-muted-foreground hover:bg-accent'}
+                    `}
+                  >
+                    {label}
+                  </button>
+                  {isGemini ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void handleVoicePreview(v)
+                      }}
+                      disabled={isPlaying}
+                      aria-label={`Preview ${v} voice`}
+                      title={isPlaying ? 'Playing…' : `Preview ${label}`}
+                      className={`flex w-9 items-center justify-center rounded-r-md border-l border-input
+                        text-muted-foreground transition-colors hover:bg-background hover:text-foreground
+                        disabled:opacity-50 disabled:cursor-not-allowed
+                      `}
+                    >
+                      <Play size={14} className={isPlaying ? 'animate-pulse' : ''} />
+                    </button>
+                  ) : null}
+                </div>
+              )
+            })}
           </div>
+          {previewError ? (
+            <p className="text-xs text-destructive" role="alert">
+              {previewError}
+            </p>
+          ) : null}
         </Card>
 
         {/* Audio Devices */}
