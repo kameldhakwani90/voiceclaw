@@ -22747,6 +22747,7 @@ __metadata:
     typescript: "npm:^5.8.3"
     vite: "npm:^8.0.10"
     vitest: "npm:^4.1.5"
+    ws: "npm:^8.18.2"
   languageName: unknown
   linkType: soft
 
