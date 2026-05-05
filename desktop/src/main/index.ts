@@ -13,6 +13,7 @@ import {
   showMainWindow,
 } from './window-lifecycle'
 import {
+  broadcastMuted,
   createCallBar,
   destroyCallBar,
   focusMainFromCallBar,
@@ -23,6 +24,20 @@ import {
   showCallBar,
   showCallBarContextMenu,
 } from './call-bar'
+import {
+  clearDrawOverlay,
+  createDrawOverlay,
+  destroyDrawOverlay,
+  getDrawOverlayWindow,
+  hideDrawOverlay,
+  onDrawOverlayDisplayBounds,
+  onDrawOverlayModeChanged,
+  onDrawOverlayStrokesChanged,
+  registerDrawOverlayHandlers,
+  setDrawOverlayMode,
+  showDrawOverlay,
+} from './draw-overlay'
+import { registerShortcutHandlers, unregisterAllShortcuts } from './shortcuts'
 import { serviceManager } from './services/service-manager'
 import {
   applyGeminiKeyToOpenClawConfig,
@@ -88,9 +103,25 @@ app.whenReady().then(async () => {
     resetOnboarding()
   }
 
+  // Predicate shared across handlers that should only accept calls from the
+  // chat / settings renderer — never from the call-bar, draw-overlay, or any
+  // future webview.
+  const isMainRendererSender = (sender: Electron.WebContents) =>
+    sender === getMainWindow()?.webContents
+
   registerAuthDeepLink()
   registerIpcHandlers()
-  registerScreenCaptureHandlers()
+  registerScreenCaptureHandlers(isMainRendererSender)
+  registerDrawOverlayHandlers()
+  registerShortcutHandlers((action) => {
+    // Actions whose visible feedback lives inside the main window need it
+    // forward when the shortcut fires from another app — e.g. screen-share's
+    // source-picker modal, and the chat surface that shows call state.
+    if (action === 'screenShare' || action === 'toggleCall') {
+      showMainWindow()
+    }
+    getMainWindow()?.webContents.send('shortcuts:triggered', action)
+  }, isMainRendererSender)
   registerTelemetryHandlers()
   const firstLaunch = isFirstLaunch()
   telemetryIdentify()
@@ -133,6 +164,39 @@ app.whenReady().then(async () => {
   // opens. The window is hidden until setCallActive(true) fires.
   createCallBar({ isDev, rendererUrl: process.env.ELECTRON_RENDERER_URL })
 
+  createDrawOverlay({ isDev, rendererUrl: process.env.ELECTRON_RENDERER_URL })
+  onDrawOverlayStrokesChanged((strokes, bounds) => {
+    getMainWindow()?.webContents.send('draw-overlay:strokes', { strokes, bounds })
+  })
+  onDrawOverlayDisplayBounds((bounds) => {
+    getMainWindow()?.webContents.send('draw-overlay:display-bounds', bounds)
+  })
+  onDrawOverlayModeChanged((mode) => {
+    getMainWindow()?.webContents.send('draw-overlay:mode', mode)
+  })
+
+  ipcMain.handle('draw-overlay:show', (e, displayId?: number) => {
+    if (e.sender !== getMainWindow()?.webContents) return
+    showDrawOverlay(typeof displayId === 'number' ? displayId : undefined)
+  })
+  ipcMain.handle('draw-overlay:hide', (e) => {
+    if (e.sender !== getMainWindow()?.webContents) return
+    hideDrawOverlay()
+  })
+  ipcMain.handle('draw-overlay:setMode', (e, mode: unknown) => {
+    const main = getMainWindow()?.webContents
+    const overlay = getDrawOverlayWindow()?.webContents
+    if (e.sender !== main && e.sender !== overlay) return
+    if (mode !== 'idle' && mode !== 'draw') return
+    setDrawOverlayMode(mode)
+  })
+  ipcMain.handle('draw-overlay:clear', (e) => {
+    const main = getMainWindow()?.webContents
+    const overlay = getDrawOverlayWindow()?.webContents
+    if (e.sender !== main && e.sender !== overlay) return
+    clearDrawOverlay()
+  })
+
   registerCallBarHooks({
     onFocusMain: () => {
       if (!getMainWindow()) {
@@ -164,9 +228,15 @@ app.whenReady().then(async () => {
     showCallBarContextMenu()
   })
 
-  ipcMain.on('call-bar:audio-levels', (_e, payload: { input: number; output: number }) => {
+  ipcMain.on('call-bar:muted', (e, muted: unknown) => {
+    if (e.sender !== getMainWindow()?.webContents) return
+    broadcastMuted(Boolean(muted))
+  })
+
+  ipcMain.on('call-bar:audio-levels', (e, payload: { input: number; output: number }) => {
     // Use .on instead of .handle — we don't need a reply, and this
     // fires up to 30 Hz.
+    if (e.sender !== getMainWindow()?.webContents) return
     setAudioLevels(
       typeof payload?.input === 'number' ? payload.input : 0,
       typeof payload?.output === 'number' ? payload.output : 0,
@@ -239,8 +309,10 @@ app.on('before-quit', async (event) => {
 })
 
 app.on('will-quit', () => {
+  unregisterAllShortcuts()
   serviceManager.stopAll()
   destroyCallBar()
+  destroyDrawOverlay()
   destroyTray()
   closeDb()
 })

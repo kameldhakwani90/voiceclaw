@@ -6,6 +6,7 @@ import { Card } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
 import { Select } from '../components/ui/Select'
 import { Toggle } from '../components/ui/Toggle'
+import { ShortcutsCard } from '../components/ShortcutsCard'
 import { identityApi, onboarding } from '../lib/onboarding-api'
 import { decodeVoicePreviewAudio } from '../lib/voice-preview'
 import { useTheme, type Theme } from '../lib/use-theme'
@@ -84,6 +85,7 @@ export function SettingsPage() {
   // Debug
   const [debugMode, setDebugMode] = useState(false)
   const [showLatency, setShowLatency] = useState(false)
+  const [showContextUsage, setShowContextUsage] = useState(false)
   const [tracingEnabled, setTracingEnabled] = useState(false)
   const [exportingBundle, setExportingBundle] = useState(false)
   const [bundleToast, setBundleToast] = useState<{ ok: boolean; message: string } | null>(null)
@@ -158,6 +160,8 @@ export function SettingsPage() {
       if (dm === 'true') setDebugMode(true)
       const sl = await getSetting('show_latency')
       if (sl === 'true') setShowLatency(true)
+      const scu = await getSetting('show_context_usage')
+      if (scu === 'true') setShowContextUsage(true)
       const tr = await getSetting('tracing_enabled')
       if (tr === 'true') setTracingEnabled(true)
 
@@ -340,6 +344,11 @@ export function SettingsPage() {
   const toggleShowLatency = useCallback((v: boolean) => {
     setShowLatency(v)
     setSetting('show_latency', v ? 'true' : 'false')
+  }, [])
+
+  const toggleShowContextUsage = useCallback((v: boolean) => {
+    setShowContextUsage(v)
+    setSetting('show_context_usage', v ? 'true' : 'false')
   }, [])
 
   const toggleTracing = useCallback((v: boolean) => {
@@ -785,6 +794,8 @@ export function SettingsPage() {
           </div>
         </Card>
 
+        <ShortcutsCard />
+
         {/* Updates */}
         <Card className="p-4 space-y-4">
           <h3 className="text-sm font-semibold text-foreground">Updates</h3>
@@ -882,6 +893,16 @@ export function SettingsPage() {
               <p className="text-xs text-muted-foreground">Display latency badges on chat messages</p>
             </div>
             <Toggle checked={showLatency} onChange={toggleShowLatency} />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-foreground">Show Context Usage</p>
+              <p className="text-xs text-muted-foreground">
+                Live token count vs the model&apos;s context window during a call
+              </p>
+            </div>
+            <Toggle checked={showContextUsage} onChange={toggleShowContextUsage} />
           </div>
 
           <div className="flex items-center justify-between">

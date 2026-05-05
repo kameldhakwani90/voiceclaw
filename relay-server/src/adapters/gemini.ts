@@ -12,6 +12,13 @@ import { mapAdapterError } from "./error-map.js"
 
 const GEMINI_WS_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 const DEFAULT_MODEL = "gemini-3.1-flash-live-preview"
+// Per-model input-token budget for the live bidi session, sourced from
+// ai.google.dev/gemini-api/docs/models. Override via
+// VOICECLAW_GEMINI_CONTEXT_WINDOW if Google's published numbers shift.
+const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "gemini-3.1-flash-live-preview": 131_072,
+}
+const FALLBACK_CONTEXT_WINDOW = 131_072
 const WATCHDOG_TIMEOUT_MS = 20_000
 const SETUP_TIMEOUT_MS = 15_000
 const MAX_RECONNECT_ATTEMPTS = 2
@@ -56,6 +63,9 @@ export class GeminiAdapter implements ProviderAdapter {
   private currentUserText = ""
   private userSpeaking = false
   private hasVideoInput = false
+  private framesSent = 0
+  private videoActive = false
+  private videoIdleTimer: ReturnType<typeof setTimeout> | null = null
   private watchdogEnabled = false
   // Watchdog arms only after the first post-resume ASR text; any generation
   // event clears it.
@@ -208,6 +218,12 @@ export class GeminiAdapter implements ProviderAdapter {
       const onClose = (code: number, reason: Buffer) => {
         const reasonText = String(reason)
         log(`[gemini] WebSocket closed: ${code} ${reasonText}`)
+        if (this.currentUserText) {
+          log(`[gemini] user (in-flight at close): ${oneLine(this.currentUserText)}`)
+        }
+        if (this.currentAssistantText) {
+          log(`[gemini] assistant (in-flight at close): ${oneLine(this.currentAssistantText)}`)
+        }
         if (!settled) {
           finish(new Error(reasonText || "Gemini setup failed"))
           return
@@ -413,6 +429,15 @@ export class GeminiAdapter implements ProviderAdapter {
 
   sendFrame(data: string, mimeType?: string) {
     this.hasVideoInput = true
+    const approxBytes = Math.round((data.length * 3) / 4)
+    if (!this.videoActive) {
+      this.videoActive = true
+      log(`[gemini] screen share started (frame #${this.framesSent}: ~${(approxBytes / 1024).toFixed(0)} KB)`)
+    } else if (this.framesSent % 30 === 0) {
+      log(`[gemini] frame #${this.framesSent}: ~${(approxBytes / 1024).toFixed(0)} KB`)
+    }
+    this.armVideoIdleTimer()
+    this.framesSent++
     this.sendUpstream({
       realtimeInput: {
         video: {
@@ -424,6 +449,19 @@ export class GeminiAdapter implements ProviderAdapter {
     // Do NOT reset the watchdog here — video frames at 1 FPS should not
     // count as user activity. Only audio activity pets the watchdog so the
     // "are you still there?" prompt fires correctly during silent screen sharing.
+  }
+
+  private armVideoIdleTimer() {
+    if (this.videoIdleTimer) clearTimeout(this.videoIdleTimer)
+    // 3 s = three missed 1 FPS frames. Anything past that is almost certainly
+    // the user stopping the share, not a network blip.
+    this.videoIdleTimer = setTimeout(() => {
+      if (this.videoActive) {
+        this.videoActive = false
+        log(`[gemini] screen share stopped (after ${this.framesSent} frame${this.framesSent === 1 ? "" : "s"})`)
+      }
+      this.videoIdleTimer = null
+    }, 3000)
   }
 
   commitAudio() {
@@ -486,6 +524,10 @@ export class GeminiAdapter implements ProviderAdapter {
     this.disconnected = true
     this.clearWatchdog()
     this.clearPostResumeWatchdog()
+    if (this.videoIdleTimer) {
+      clearTimeout(this.videoIdleTimer)
+      this.videoIdleTimer = null
+    }
     if (this.upstream && this.upstream.readyState !== WebSocket.CLOSED) {
       this.upstream.close()
     }
@@ -572,6 +614,28 @@ export class GeminiAdapter implements ProviderAdapter {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private handleServerMessage(msg: any) {
+    // usageMetadata can ship in the same envelope as serverContent (e.g. on
+    // turnComplete). Process it before the early-returns below so we don't
+    // drop it. The dedicated usageMetadata-only branch further down covers
+    // messages where it arrives standalone.
+    if (msg.usageMetadata && (msg.serverContent || msg.toolCall)) {
+      const u = msg.usageMetadata
+      this.logUsage(u)
+      // Only forward to the client when there's a meaningful prompt count.
+      // Per-chunk updates carry only an output-audio delta and would make the
+      // UI strip flicker between real values and zeros.
+      if ((u.promptTokenCount ?? 0) > 0) {
+        this.sendToClient?.({
+          type: "usage.metrics",
+          promptTokens: u.promptTokenCount,
+          completionTokens: u.responseTokenCount,
+          totalTokens: u.totalTokenCount,
+          inputAudioTokens: findModalityTokens(u.promptTokensDetails, "AUDIO"),
+          outputAudioTokens: findModalityTokens(u.responseTokensDetails, "AUDIO"),
+        })
+      }
+    }
+
     if (msg.serverContent) {
       this.handleServerContent(msg.serverContent)
       return
@@ -627,24 +691,59 @@ export class GeminiAdapter implements ProviderAdapter {
     }
 
     if (msg.usageMetadata) {
-      log(`[gemini] Usage: ${JSON.stringify(msg.usageMetadata)}`)
       const u = msg.usageMetadata
-      this.sendToClient?.({
-        type: "usage.metrics",
-        promptTokens: u.promptTokenCount,
-        completionTokens: u.responseTokenCount,
-        totalTokens: u.totalTokenCount,
-        inputAudioTokens: findModalityTokens(u.promptTokensDetails, "AUDIO"),
-        outputAudioTokens: findModalityTokens(u.responseTokensDetails, "AUDIO"),
-      })
+      this.logUsage(u)
+      if ((u.promptTokenCount ?? 0) > 0) {
+        this.sendToClient?.({
+          type: "usage.metrics",
+          promptTokens: u.promptTokenCount,
+          completionTokens: u.responseTokenCount,
+          totalTokens: u.totalTokenCount,
+          inputAudioTokens: findModalityTokens(u.promptTokensDetails, "AUDIO"),
+          outputAudioTokens: findModalityTokens(u.responseTokensDetails, "AUDIO"),
+        })
+      }
       return
     }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private logUsage(u: any) {
+    // Gemini Live emits usageMetadata per audio chunk during a turn — most of
+    // those carry only a tiny responseTokenCount and tell us nothing about
+    // the running context window. Skip them; log only the turn-boundary
+    // updates that include the cumulative prompt count.
+    const used = u.promptTokenCount ?? 0
+    if (used <= 0) return
+    const inputAudio = findModalityTokens(u.promptTokensDetails, "AUDIO")
+    // Gemini Live counts realtimeInput.video frames under the IMAGE modality
+    // (each JPEG is tokenized as a still). Fall back to VIDEO for any model
+    // that reports it as a stream instead.
+    const inputVideo =
+      sumModalityTokens(u.promptTokensDetails, ["IMAGE", "VIDEO"])
+    const inputText = findModalityTokens(u.promptTokensDetails, "TEXT")
+    const outputAudio = findModalityTokens(u.responseTokensDetails, "AUDIO")
+    const model = this.config?.model || DEFAULT_MODEL
+    const limit = contextWindowFor(model)
+    const pct = limit > 0 ? Math.round((used / limit) * 100) : 0
+    log(
+      `[gemini] context: ${formatTokens(used)} / ${formatTokens(limit)} (${pct}%) ` +
+        `audio=${formatTokens(inputAudio)}, ` +
+        `video=${formatTokens(inputVideo)}, ` +
+        `text=${formatTokens(inputText)} | ` +
+        `out ${formatTokens(u.responseTokenCount ?? 0)} (audio=${formatTokens(outputAudio)})`,
+    )
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private handleServerContent(content: any) {
-    const keys = Object.keys(content).join(", ")
-    log(`[gemini] serverContent: ${keys}`)
+    // Per-chunk modelTurn / outputTranscription deltas would log ~30 lines
+    // per assistant response — we already emit "[gemini] user: ..." and
+    // "[gemini] assistant: ..." on flush, plus distinct log lines for
+    // turn boundaries and "Response interrupted by user" further down.
+    // Surface only the meaningful state transitions here, drop the rest.
+    if (content.generationComplete) log(`[gemini] generationComplete`)
+    if (content.turnComplete) log(`[gemini] turnComplete`)
 
     // Any generation-side activity means the resumed session's turn controller
     // is healthy — cancel the post-resume watchdog.
@@ -671,6 +770,7 @@ export class GeminiAdapter implements ProviderAdapter {
     if (content.outputTranscription?.text) {
       if (this.currentUserText) {
         this.transcript.push({ role: "user", text: this.currentUserText })
+        log(`[gemini] user: ${oneLine(this.currentUserText)}`)
         this.sendToClient?.({
           type: "transcript.done",
           text: this.currentUserText,
@@ -734,6 +834,7 @@ export class GeminiAdapter implements ProviderAdapter {
       this.emitLatencyMetrics()
       if (this.currentUserText) {
         this.transcript.push({ role: "user", text: this.currentUserText })
+        log(`[gemini] user: ${oneLine(this.currentUserText)}`)
         this.sendToClient?.({
           type: "transcript.done",
           text: this.currentUserText,
@@ -743,6 +844,7 @@ export class GeminiAdapter implements ProviderAdapter {
       }
       if (this.currentAssistantText) {
         this.transcript.push({ role: "assistant", text: this.currentAssistantText })
+        log(`[gemini] assistant: ${oneLine(this.currentAssistantText)}`)
         this.sendToClient?.({
           type: "transcript.done",
           text: this.currentAssistantText,
@@ -764,6 +866,7 @@ export class GeminiAdapter implements ProviderAdapter {
       }
       if (this.currentUserText) {
         this.transcript.push({ role: "user", text: this.currentUserText })
+        log(`[gemini] user: ${oneLine(this.currentUserText)}`)
         this.sendToClient?.({
           type: "transcript.done",
           text: this.currentUserText,
@@ -773,6 +876,7 @@ export class GeminiAdapter implements ProviderAdapter {
       }
       if (this.currentAssistantText) {
         this.transcript.push({ role: "assistant", text: this.currentAssistantText + "..." })
+        log(`[gemini] assistant (interrupted): ${oneLine(this.currentAssistantText)}`)
         this.sendToClient?.({
           type: "transcript.done",
           text: this.currentAssistantText + "...",
@@ -1027,6 +1131,40 @@ export class GeminiAdapter implements ProviderAdapter {
   }
 }
 
+function contextWindowFor(model: string): number {
+  const override = process.env.VOICECLAW_GEMINI_CONTEXT_WINDOW
+  if (override) {
+    const n = Number.parseInt(override, 10)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return MODEL_CONTEXT_WINDOWS[model] ?? FALLBACK_CONTEXT_WINDOW
+}
+
+function formatTokens(n: number | undefined | null): string {
+  if (n == null || !Number.isFinite(n) || n < 0) return "?"
+  if (n < 1000) return String(n)
+  if (n < 100_000) return `${(n / 1000).toFixed(1)}k`
+  return `${Math.round(n / 1000)}k`
+}
+
+function oneLine(s: string): string {
+  // Collapse whitespace runs into a single space so the line stays log-friendly,
+  // but escape non-printable controls (NULs, lone surrogates, etc.) so anything
+  // exotic that arrived from upstream is visible instead of swallowed by the
+  // terminal.
+  let collapsed = ""
+  for (const ch of s) {
+    const code = ch.codePointAt(0) ?? 0
+    if (code < 0x20 || code === 0x7f) {
+      collapsed += /\s/.test(ch) ? " " : `\\u${code.toString(16).padStart(4, "0")}`
+    } else {
+      collapsed += ch
+    }
+  }
+  collapsed = collapsed.replace(/\s+/g, " ").trim()
+  return collapsed.length > 1000 ? `${collapsed.slice(0, 1000)}…` : collapsed
+}
+
 function pickEarliest(a: number | null, b: number | null): number | null {
   if (a == null) return b
   if (b == null) return a
@@ -1085,6 +1223,23 @@ function findModalityTokens(
   modality: string,
 ): number | undefined {
   return details?.find((d) => d.modality === modality)?.tokenCount
+}
+
+function sumModalityTokens(
+  details: { modality?: string, tokenCount?: number }[] | undefined,
+  modalities: string[],
+): number | undefined {
+  if (!details) return undefined
+  let sum = 0
+  let any = false
+  for (const m of modalities) {
+    const n = findModalityTokens(details, m)
+    if (typeof n === "number") {
+      sum += n
+      any = true
+    }
+  }
+  return any ? sum : undefined
 }
 
 function parseStatusFromErrorMessage(message: string): number | null {

@@ -67,6 +67,15 @@ export interface RealtimeCallbacks {
   onSessionEnded?: (summary: string) => void
   onDisconnect?: () => void
   onError?: (message: string, code: number, payload?: AdapterErrorPayload) => void
+  onUsage?: (usage: UsageSnapshot) => void
+}
+
+export interface UsageSnapshot {
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+  inputAudioTokens?: number
+  outputAudioTokens?: number
 }
 
 export interface RealtimeControls {
@@ -75,7 +84,10 @@ export interface RealtimeControls {
   setMuted: (muted: boolean) => void
   setOutputVolume: (volume: number) => void
   setOutputMuted: (muted: boolean) => void
-  sendFrame: (base64Jpeg: string) => void
+  sendFrame: (
+    base64Jpeg: string,
+    annotation?: { original: string; strokesPng: string },
+  ) => void
   sendUserText: (text: string) => boolean
   getInputLevel: () => number
   getOutputLevel: () => number
@@ -237,6 +249,16 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
 
         case 'session.rotated':
           if (typeof data.sessionId === 'string') setSessionId(data.sessionId)
+          break
+
+        case 'usage.metrics':
+          cb.onUsage?.({
+            promptTokens: data.promptTokens,
+            completionTokens: data.completionTokens,
+            totalTokens: data.totalTokens,
+            inputAudioTokens: data.inputAudioTokens,
+            outputAudioTokens: data.outputAudioTokens,
+          })
           break
 
         case 'error':
@@ -403,11 +425,23 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
     engineRef.current?.setOutputMuted(muted)
   }, [])
 
-  const sendFrame = useCallback((base64Jpeg: string) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'frame.append', data: base64Jpeg }))
-    }
-  }, [])
+  const sendFrame = useCallback(
+    (
+      base64Jpeg: string,
+      annotation?: { original: string; strokesPng: string },
+    ) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'frame.append',
+            data: base64Jpeg,
+            ...(annotation ? { annotation } : {}),
+          }),
+        )
+      }
+    },
+    [],
+  )
 
   const sendUserText = useCallback((text: string) => {
     if (!text) return false

@@ -34,7 +34,14 @@ import { ScreenSharePicker } from '../components/ScreenSharePicker'
 import { VolumeControl } from '../components/VolumeControl'
 import { ToolCallRow } from '../components/ToolCallRow'
 import { AdapterErrorBanner } from '../components/AdapterErrorBanner'
-import { ScreenCapture, type ScreenSource } from '../lib/screen-capture'
+import {
+  ScreenCapture,
+  type DisplayBounds,
+  type ScreenSource,
+  type SourceContext,
+  type Stroke,
+  type WindowBounds,
+} from '../lib/screen-capture'
 import { useRealtime, type RealtimeCallbacks, type AdapterErrorPayload } from '../lib/use-realtime'
 import { captureRenderer } from '../lib/telemetry'
 import { useConversationContext } from '../lib/conversation-context'
@@ -96,6 +103,13 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
   // current role outside of a setState updater since updaters must stay pure.
   const streamingRoleRef = useRef<'user' | 'assistant'>('assistant')
   const [showLatency, setShowLatency] = useState(false)
+  const [showContextUsage, setShowContextUsage] = useState(false)
+  const [usage, setUsage] = useState<{
+    promptTokens?: number
+    totalTokens?: number
+    inputAudioTokens?: number
+    outputAudioTokens?: number
+  } | null>(null)
   const [connectionError, setConnectionError] = useState('')
   const [adapterError, setAdapterError] = useState<AdapterErrorPayload | null>(null)
   const [activeRealtimeModel, setActiveRealtimeModel] = useState('')
@@ -103,6 +117,12 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
   const [isScreenSharing, setIsScreenSharing] = useState(false)
   const [screenSourceName, setScreenSourceName] = useState('')
   const screenCaptureRef = useRef<ScreenCapture | null>(null)
+  const overlayStrokesRef = useRef<Stroke[]>([])
+  const overlayDisplayBoundsRef = useRef<DisplayBounds | null>(null)
+  const sourceContextRef = useRef<SourceContext | null>(null)
+  const windowBoundsPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [drawMode, setDrawMode] = useState(false)
+  const [hasStrokes, setHasStrokes] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const activeRelayUrlRef = useRef<string>('')
   const brainCallStartRef = useRef<Map<string, number>>(new Map())
@@ -198,6 +218,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
   useEffect(() => {
     loadLatestConversation()
     getSetting('show_latency').then((v) => setShowLatency(v === 'true'))
+    getSetting('show_context_usage').then((v) => setShowContextUsage(v === 'true'))
     getSetting('realtime_volume').then((v) => {
       const parsed = parseFloat(v ?? '')
       if (!Number.isNaN(parsed)) setBaseVolume(Math.max(0, parsed))
@@ -354,6 +375,14 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       setIsCallActive(false)
       realtimeRef.current?.stop()
     },
+    onUsage: (snapshot) => {
+      setUsage({
+        promptTokens: snapshot.promptTokens,
+        totalTokens: snapshot.totalTokens,
+        inputAudioTokens: snapshot.inputAudioTokens,
+        outputAudioTokens: snapshot.outputAudioTokens,
+      })
+    },
   }
 
   const realtime = useRealtime(realtimeCallbacks)
@@ -449,11 +478,13 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     setIsMuted(false)
     setOutputMuted(false)
     setActiveRealtimeModel('')
+    window.electronAPI?.callBar?.sendMuted?.(false)
   }, [realtime])
 
   const toggleMute = useCallback(() => {
     const next = !isMuted
     setIsMuted(next)
+    window.electronAPI?.callBar?.sendMuted?.(next)
     realtime.setMuted(next)
   }, [isMuted, realtime])
 
@@ -603,15 +634,42 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
   const startScreenShare = useCallback(async (source: ScreenSource) => {
     if (activeRealtimeModel.startsWith('grok-voice-')) return
     setShowScreenPicker(false)
+    const sourceKind: 'display' | 'window' = source.id.startsWith('screen:')
+      ? 'display'
+      : 'window'
     const capture = new ScreenCapture()
     capture.setSourceName(source.name)
+    capture.setAnnotationProvider({
+      getStrokes: () => overlayStrokesRef.current,
+      getSourceContext: () => sourceContextRef.current,
+    })
     screenCaptureRef.current = capture
     try {
-      await capture.start(source.id, (base64Jpeg) => {
-        realtime.sendFrame(base64Jpeg)
+      await capture.start(source.id, (frame) => {
+        if (frame.hasStrokes && frame.strokesPng) {
+          realtime.sendFrame(frame.composite, {
+            original: frame.original,
+            strokesPng: frame.strokesPng,
+          })
+        } else {
+          realtime.sendFrame(frame.composite)
+        }
       })
       setIsScreenSharing(true)
       setScreenSourceName(source.name)
+      // For display sources the chromeMediaSourceId is "screen:<displayId>:0";
+      // pulling the displayId out and forwarding it to the overlay keeps the
+      // transparent canvas on the same monitor as the captured frame so
+      // strokes line up on multi-display setups.
+      const displayId =
+        sourceKind === 'display' ? parseDisplayIdFromSourceId(source.id) : null
+      void window.electronAPI.drawOverlay.show(displayId ?? undefined)
+      if (sourceKind === 'window') {
+        const windowId = parseWindowIdFromSourceId(source.id)
+        if (windowId !== null) {
+          startWindowBoundsPolling(windowId)
+        }
+      }
     } catch (err) {
       console.error('[ChatPage] Screen capture failed:', err)
       screenCaptureRef.current = null
@@ -623,6 +681,125 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     screenCaptureRef.current = null
     setIsScreenSharing(false)
     setScreenSourceName('')
+    setDrawMode(false)
+    setHasStrokes(false)
+    overlayStrokesRef.current = []
+    overlayDisplayBoundsRef.current = null
+    sourceContextRef.current = null
+    if (windowBoundsPollRef.current) {
+      clearInterval(windowBoundsPollRef.current)
+      windowBoundsPollRef.current = null
+    }
+    // Clear before hide — the overlay window stays alive across shares,
+    // so its own strokesRef would otherwise repaint stale annotations the
+    // moment the next share starts and the user begins drawing again.
+    void window.electronAPI.drawOverlay.clear()
+    void window.electronAPI.drawOverlay.hide()
+  }, [])
+
+  const toggleDrawMode = useCallback(() => {
+    void window.electronAPI.drawOverlay.setMode(drawMode ? 'idle' : 'draw')
+  }, [drawMode])
+
+  const clearStrokes = useCallback(() => {
+    overlayStrokesRef.current = []
+    setHasStrokes(false)
+    void window.electronAPI.drawOverlay.clear()
+  }, [])
+
+  const toggleScreenShare = useCallback(() => {
+    if (isScreenSharing) {
+      stopScreenShare()
+    } else {
+      setShowScreenPicker(true)
+    }
+  }, [isScreenSharing, stopScreenShare])
+
+  useEffect(() => {
+    const off = window.electronAPI.shortcuts?.onTriggered((action) => {
+      if (action === 'toggleCall') {
+        if (isCallActive) {
+          endCall()
+        } else if (!isConnecting) {
+          void startCall()
+        }
+      } else if (action === 'mute') {
+        if (isCallActive) toggleMute()
+      } else if (action === 'annotate') {
+        if (isScreenSharing) toggleDrawMode()
+      } else if (action === 'clearAnnotations') {
+        if (isScreenSharing) clearStrokes()
+      } else if (action === 'screenShare') {
+        if (isCallActive) toggleScreenShare()
+      }
+    })
+    return off
+  }, [
+    isCallActive,
+    isConnecting,
+    isScreenSharing,
+    startCall,
+    endCall,
+    toggleMute,
+    toggleDrawMode,
+    clearStrokes,
+    toggleScreenShare,
+  ])
+
+  function startWindowBoundsPolling(windowId: number) {
+    if (windowBoundsPollRef.current) {
+      clearInterval(windowBoundsPollRef.current)
+    }
+    const refresh = async () => {
+      const display = overlayDisplayBoundsRef.current
+      if (!display) return
+      const bounds = await window.electronAPI.screen.getWindowBounds(windowId)
+      const winBounds: WindowBounds | null = bounds
+        ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
+        : null
+      sourceContextRef.current = {
+        kind: 'window',
+        displayBounds: display,
+        windowBounds: winBounds,
+      }
+    }
+    void refresh()
+    windowBoundsPollRef.current = setInterval(() => void refresh(), 1000)
+  }
+
+  useEffect(() => {
+    const offStrokes = window.electronAPI.drawOverlay.onStrokes(({ strokes, bounds }) => {
+      overlayStrokesRef.current = strokes
+      overlayDisplayBoundsRef.current = bounds
+      setHasStrokes(strokes.length > 0)
+      if (sourceContextRef.current?.kind === 'window') {
+        sourceContextRef.current = {
+          ...sourceContextRef.current,
+          displayBounds: bounds,
+        }
+      } else {
+        sourceContextRef.current = { kind: 'display', displayBounds: bounds }
+      }
+    })
+    const offBounds = window.electronAPI.drawOverlay.onDisplayBounds((bounds) => {
+      overlayDisplayBoundsRef.current = bounds
+      if (sourceContextRef.current?.kind === 'window') {
+        sourceContextRef.current = {
+          ...sourceContextRef.current,
+          displayBounds: bounds,
+        }
+      } else {
+        sourceContextRef.current = { kind: 'display', displayBounds: bounds }
+      }
+    })
+    const offMode = window.electronAPI.drawOverlay.onModeChanged((mode) => {
+      setDrawMode(mode === 'draw')
+    })
+    return () => {
+      offStrokes()
+      offBounds()
+      offMode()
+    }
   }, [])
 
   // Clean up screen capture when call ends
@@ -922,17 +1099,55 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Context usage debug strip */}
+      {showContextUsage && isCallActive && usage && (
+        <div className="px-4 py-1 text-[11px] text-muted-foreground font-mono flex items-center justify-between border-t border-border">
+          <span>
+            context: {formatTokens(usage.promptTokens)} /{' '}
+            {formatTokens(getContextWindowFor(activeRealtimeModel))}
+            {' '}
+            ({formatPercent(usage.promptTokens, getContextWindowFor(activeRealtimeModel))})
+          </span>
+          <span className="text-muted-foreground/70">
+            audio in {formatTokens(usage.inputAudioTokens)} · out {formatTokens(usage.outputAudioTokens)}
+          </span>
+        </div>
+      )}
+
       {/* Screen sharing indicator */}
       {isScreenSharing && (
         <div className="px-4 py-1.5 flex items-center gap-2 text-xs text-[var(--brand-sage)]">
           <Monitor size={14} />
           <span className="truncate">Sharing: {screenSourceName}</span>
-          <button
-            onClick={stopScreenShare}
-            className="ml-auto text-muted-foreground hover:text-destructive transition-colors"
-          >
-            Stop
-          </button>
+          <div className="ml-auto flex items-center gap-3">
+            <button
+              type="button"
+              onClick={toggleDrawMode}
+              className={`transition-colors ${
+                drawMode
+                  ? 'text-[var(--brand-rust)]'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title={drawMode ? 'Stop drawing' : 'Draw on screen'}
+            >
+              {drawMode ? 'Drawing' : 'Draw'}
+            </button>
+            <button
+              type="button"
+              onClick={clearStrokes}
+              disabled={!hasStrokes}
+              className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Clear strokes"
+            >
+              Clear
+            </button>
+            <button
+              onClick={stopScreenShare}
+              className="text-muted-foreground hover:text-destructive transition-colors"
+            >
+              Stop
+            </button>
+          </div>
         </div>
       )}
 
@@ -1195,4 +1410,45 @@ async function defaultRelayUrl(): Promise<string> {
     // fall through
   }
   return 'ws://localhost:8080/ws'
+}
+
+// Mirrors relay-server/src/adapters/gemini.ts MODEL_CONTEXT_WINDOWS. Kept in
+// sync manually — when Google bumps a model, update both. The renderer only
+// needs entries for models the user can actually pick (set in REALTIME_MODELS).
+const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  'gemini-3.1-flash-live-preview': 131_072,
+}
+const FALLBACK_CONTEXT_WINDOW = 131_072
+
+function getContextWindowFor(model: string): number {
+  return MODEL_CONTEXT_WINDOWS[model] ?? FALLBACK_CONTEXT_WINDOW
+}
+
+function formatTokens(n: number | undefined | null): string {
+  if (n == null || !Number.isFinite(n) || n < 0) return '?'
+  if (n < 1000) return String(n)
+  if (n < 100_000) return `${(n / 1000).toFixed(1)}k`
+  return `${Math.round(n / 1000)}k`
+}
+
+function formatPercent(used: number | undefined, limit: number): string {
+  if (used == null || !Number.isFinite(used) || limit <= 0) return '?%'
+  return `${Math.round((used / limit) * 100)}%`
+}
+
+function parseDisplayIdFromSourceId(sourceId: string): number | null {
+  // chromeMediaSourceId for screens is "screen:<electronDisplayId>:0".
+  const match = /^screen:(\d+):/.exec(sourceId)
+  if (!match) return null
+  const id = Number.parseInt(match[1], 10)
+  return Number.isFinite(id) ? id : null
+}
+
+function parseWindowIdFromSourceId(sourceId: string): number | null {
+  // chromeMediaSourceId for windows is "window:<CGWindowID>:<displayId>" on
+  // macOS. We need the CGWindowID to look up live screen-rect via get-windows.
+  const match = /^window:(\d+):/.exec(sourceId)
+  if (!match) return null
+  const id = Number.parseInt(match[1], 10)
+  return Number.isFinite(id) ? id : null
 }
