@@ -576,15 +576,26 @@ export class RelaySession {
       case "audio.commit":
         this.adapter?.commitAudio()
         break
-      case "frame.append":
+      case "frame.append": {
         // Tee video frames (JPEG base64) into the per-turn frame sequence.
         // Offset is turn-relative so playback aligns with the turn's audio.
+        // Validate axText defensively: the renderer caps the payload, but
+        // the relay is the trust boundary.
+        const axText = sanitizeAxText(event.axText)
         this.media.onVideoFrame(
           event.data,
           Math.max(0, Date.now() - this.currentTurnStartMs),
+          axText,
         )
         this.adapter?.sendFrame(event.data, event.mimeType)
+        // Upstream send of axText is intentionally OFF here: forwarding it
+        // every video frame as realtimeInput.text triggers Gemini Live to
+        // treat each frame as a fresh user turn, generating a tool-call
+        // storm and closing the WS with 1007. The tracer still records the
+        // text per frame for A/B analysis. A turn-bounded or on-change
+        // forwarding strategy is needed before re-enabling.
         break
+      }
       case "response.create":
         this.adapter?.createResponse()
         break
@@ -860,4 +871,17 @@ function extractBrainError(result: string): string | null {
     // not JSON
   }
   return null
+}
+
+// Server-side cap on the AX text channel. The renderer applies the same
+// cap, but the relay is the trust boundary — a misbehaving or malicious
+// client must not be able to push arbitrary-size strings into the tracer
+// or upstream provider. Match the renderer's 8 KB UTF-8 budget.
+const AX_TEXT_MAX_BYTES = 8 * 1024
+
+function sanitizeAxText(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0) return undefined
+  const buf = Buffer.from(value, "utf8")
+  if (buf.byteLength <= AX_TEXT_MAX_BYTES) return value
+  return buf.slice(0, AX_TEXT_MAX_BYTES).toString("utf8") + "…"
 }
