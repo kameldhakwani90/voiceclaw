@@ -68,6 +68,29 @@ describe('groupMessages', () => {
     expect(messages[1]).toMatchObject({ isFirstInBurst: true, isLastInBurst: true })
   })
 
+  it('dedupes consecutive role-transition separators that share a label', () => {
+    const out = groupMessages(
+      [
+        msg(1, 'user', 0),
+        msg(2, 'assistant', 5_000),
+        msg(3, 'user', 10_000),
+        msg(4, 'assistant', 15_000),
+      ],
+      { now: BASE + 20_000 },
+    )
+    const seps = out.filter((i) => i.kind === 'separator') as Extract<
+      typeof out[number],
+      { kind: 'separator' }
+    >[]
+    expect(seps).toHaveLength(2)
+    expect(seps[1].label).toBe('just now')
+    const messages = out.filter((i) => i.kind === 'message')
+    expect(messages).toHaveLength(4)
+    for (const m of messages) {
+      expect(m).toMatchObject({ isFirstInBurst: true, isLastInBurst: true })
+    }
+  })
+
   it('uses configurable burst threshold', () => {
     const out = groupMessages(
       [msg(1, 'user', 0), msg(2, 'user', 90_000)],
