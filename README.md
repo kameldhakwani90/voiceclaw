@@ -92,14 +92,14 @@ config:
 flowchart LR
  subgraph Clients["📲 Clients"]
     direction TB
-        Mobile["📱 Mobile App<br>Native audio I/O"]
-        Desktop["🖥️ Desktop App<br>Web Audio + screen share"]
+        Mobile["📱 Mobile App<br>"]
+        Desktop["🖥️ Desktop App<br>"]
   end
-    Mobile -- WebSocket<br>audio+video --> Relay["🔗 Relay Server<br>(TypeScript / Node.js)<br><br>- Session mgmt<br>- Provider adapter<br>- Brain agent gateway<br>- Tracing (Langfuse / OTEL)"]
-    Desktop -- WebSocket<br>audio + video --> Relay
-    Relay <-- Provider WebSocket<br>audio + video --> Provider["📢 Realtime AI Provider<br>(Gemini Live / Grok Voice / OpenAI Realtime)<br><br>- Speech to Speech"]
-    Provider -- tool call: ask_brain --> Relay
-    Relay <-- POST /v1/chat/completions<br>(SSE stream) --> Brain["🧠 Brain AI<br>(OpenAI-compatible agent)<br><br>- Web search<br>- Calendar / tasks<br>- Long-term memory"]
+    Mobile -- "1. audio" --> Relay["🔗 Relay Server<br>"]
+    Desktop -- "1. audio + video" --> Relay
+    Relay <-- "2. forward<br>audio + video" --> Provider["📢 Realtime AI Provider (S2S)"]
+    Relay <-- "4. Asking brain...</br>POST /v1/chat/completions</br>(SSE stream)" --> Brain["🧠 Brain AI <br>(LLM Agent: OpenClaw, Hermes, Pi)<br>"]
+    Provider -- "3. tool call: ask_brain" --> Relay
 
      Mobile:::clientStyle
      Desktop:::clientStyle
