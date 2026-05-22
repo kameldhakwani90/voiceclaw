@@ -117,15 +117,21 @@ export function buildInstructions(config: SessionConfigEvent): string {
     const identity = loadAgentIdentity(config.provider)
     log(`[instructions] Loaded agent identity (${identity.length} chars): ${identity.substring(0, 100)}...`)
     parts.push(identity)
-    parts.push(BRAIN_INTRO)
-    const asyncToolsExposed = hasNonBlockingTool(config)
-    if (asyncToolsExposed) {
-      parts.push(BRAIN_ASYNC_RULES)
+    // In direct-tools mode, the realtime model no longer has ask_brain — its
+    // capabilities come from read/write/edit/bash. The BRAIN_* sections
+    // would actively mislead it (e.g., telling it to defer memory queries
+    // when memory is preloaded), so skip them.
+    if (!config.experimentalDirectTools) {
+      parts.push(BRAIN_INTRO)
+      const asyncToolsExposed = hasNonBlockingTool(config)
+      if (asyncToolsExposed) {
+        parts.push(BRAIN_ASYNC_RULES)
+      }
+      const memoryRules = asyncToolsExposed
+        ? `${BRAIN_MEMORY_RULES_BASE}\n\n${BRAIN_MEMORY_ASYNC_TAIL}`
+        : BRAIN_MEMORY_RULES_BASE
+      parts.push(memoryRules)
     }
-    const memoryRules = asyncToolsExposed
-      ? `${BRAIN_MEMORY_RULES_BASE}\n\n${BRAIN_MEMORY_ASYNC_TAIL}`
-      : BRAIN_MEMORY_RULES_BASE
-    parts.push(memoryRules)
   } else {
     parts.push("You are a helpful voice assistant. Keep your responses conversational and concise.")
   }
