@@ -18,6 +18,7 @@ import { runWrite, WRITE_TOOL_NAME } from "./tools/direct/write.js"
 import { runEdit, EDIT_TOOL_NAME } from "./tools/direct/edit.js"
 import { runBash, BASH_TOOL_NAME } from "./tools/direct/bash.js"
 import { buildInstructions } from "./instructions.js"
+import { ensureWorkspace } from "./workspace.js"
 import { log, error as logError } from "./log.js"
 import { TurnTracer } from "./tracing/turn-tracer.js"
 import { MediaCapture } from "./media/capture.js"
@@ -857,6 +858,18 @@ export class RelaySession {
     log(`[session:${this.id}] Auth passed, creating ${config.provider} adapter (model=${config.model || "default"})`)
     this.config = config
     this.startedAt = Date.now()
+
+    // When direct tools are enabled, ensure the workspace + default AGENTS.md
+    // exist before buildInstructions reads them (and before the model gets
+    // its first chance to call write/edit). Best-effort: failures here
+    // shouldn't block the session, the tools will surface clearer errors.
+    if (config.experimentalDirectTools) {
+      try {
+        await ensureWorkspace()
+      } catch (err) {
+        logError(`[session:${this.id}] ensureWorkspace failed:`, err instanceof Error ? err.message : err)
+      }
+    }
     // Capture the assembled system prompt so every voice-turn span carries the
     // full context Gemini / Grok Voice / OpenAI Realtime was configured with. Uses the same
     // buildInstructions the Gemini adapter feeds to the provider, so the trace

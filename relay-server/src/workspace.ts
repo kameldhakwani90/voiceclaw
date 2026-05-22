@@ -4,7 +4,7 @@
 // for write/edit, the bash denylist, memory-file resolution, and the default
 // AGENTS.md the model reads at session start.
 
-import { promises as fs } from "node:fs"
+import { promises as fs, readFileSync, existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
@@ -104,6 +104,36 @@ export async function loadRecentMemory(now: Date, daysBack: number): Promise<Mem
     }
   }
   return out
+}
+
+// Sync variant — used at session.config time when buildInstructions composes
+// the system prompt. buildInstructions is sync (matches existing readFileSync
+// usage for IDENTITY.md / SOUL.md) so this stays sync too.
+export function loadRecentMemorySync(now: Date, daysBack: number): MemorySnapshot[] {
+  const out: MemorySnapshot[] = []
+  for (let i = daysBack; i >= 0; i--) {
+    const d = new Date(now.getTime())
+    d.setDate(d.getDate() - i)
+    const path = resolveMemoryFile(d)
+    if (!existsSync(path)) continue
+    try {
+      const contents = readFileSync(path, "utf-8")
+      out.push({ date: formatDateYmd(d), path, contents })
+    } catch {
+      // best-effort
+    }
+  }
+  return out
+}
+
+export function readAgentsMdSync(): string {
+  const path = getAgentsMdPath()
+  if (!existsSync(path)) return DEFAULT_AGENTS_MD
+  try {
+    return readFileSync(path, "utf-8")
+  } catch {
+    return DEFAULT_AGENTS_MD
+  }
 }
 
 export interface PathResolution {

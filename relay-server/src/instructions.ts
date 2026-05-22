@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { homedir } from "node:os"
 import type { SessionConfigEvent } from "./types.js"
 import { hasNonBlockingTool } from "./tools/index.js"
+import { loadRecentMemorySync, readAgentsMdSync } from "./workspace.js"
 import { log, warn } from "./log.js"
 
 const BRAIN_WORKSPACE = process.env.BRAIN_WORKSPACE
@@ -94,6 +95,21 @@ This applies even if you think you know the answer from the current conversation
 
 const BRAIN_MEMORY_ASYNC_TAIL = `**While ask_brain is still running** (5–20 seconds), do NOT start composing the answer in any form — no "Today we talked about…", no "I think we covered…", no warm-up sentence that begins answering. Two reasons: (1) you don't have the answer yet, and (2) anything you say in that gap is invention. Acceptable: short verbal bridges ("let me check…", "pulling it up…", "one sec…", brief silence). Unacceptable: any sentence whose meaning depends on the answer you don't yet have. Wait until the Brain agent result message lands in your context, then speak from it.`
 
+const DIRECT_TOOLS_PREAMBLE = `
+## Your direct tools
+
+You have direct tools on the user's machine. No brain hop, no out-of-process agent — these run in the relay and stream straight back to you.
+
+- \`read\` to inspect files (anywhere on the machine). Fast — wait for the result.
+- \`write\` and \`edit\` to modify files inside your workspace (~/.voiceclaw/workspace/). Fast.
+- \`bash\` to run shell commands. Output streams to you as it arrives. When a command will take more than a couple seconds, say a short verbal bridge while you wait, then keep talking as output arrives.
+- \`web_search\` for quick public facts.
+
+**Your memory lives in ~/.voiceclaw/workspace/memory/YYYY-MM-DD.md.** Today's file and the previous week have been preloaded for you below. To save something durable, append a \`## Voice Note (HH:MM)\` section to today's file using \`write\` (when creating) or \`edit\` (when adding to an existing one).
+
+**For multi-step work** — refactors, bug investigations, writing code — delegate via \`bash claude -p "<task>"\` or \`bash codex "<task>"\`. Those are imperative-loop agents that do the work in their own loop and stream progress back. Narrate what they're doing to the user as their output arrives. Don't try to drive a multi-step task with many small read/write/edit calls.
+`.trim()
+
 export function buildInstructions(config: SessionConfigEvent): string {
   const parts: string[] = []
 
@@ -112,6 +128,11 @@ export function buildInstructions(config: SessionConfigEvent): string {
     parts.push(memoryRules)
   } else {
     parts.push("You are a helpful voice assistant. Keep your responses conversational and concise.")
+  }
+
+  if (config.experimentalDirectTools) {
+    parts.push(DIRECT_TOOLS_PREAMBLE)
+    parts.push(buildWorkspaceContextSection())
   }
 
   parts.push(CONVERSATION_RULES)
@@ -147,6 +168,28 @@ export function buildInstructions(config: SessionConfigEvent): string {
 }
 
 // --- helpers ---
+
+function buildWorkspaceContextSection(): string {
+  const agentsMd = readAgentsMdSync()
+  const memory = loadRecentMemorySync(new Date(), 7)
+  const memorySections = memory.length === 0
+    ? "_No memory files yet. Create today's file by calling `write` on `memory/YYYY-MM-DD.md` with a `## Voice Note (HH:MM)` section._"
+    : memory
+        .map((snap) => `### ${snap.date}\n\n${snap.contents.trim()}`)
+        .join("\n\n")
+
+  return [
+    "## Workspace context (preloaded)",
+    "",
+    "### AGENTS.md",
+    "",
+    agentsMd.trim(),
+    "",
+    "### Recent memory (today + last 7 days)",
+    "",
+    memorySections,
+  ].join("\n")
+}
 
 function loadAgentIdentity(provider: SessionConfigEvent["provider"]): string {
   const profile = loadAgentProfile()
