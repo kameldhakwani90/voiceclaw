@@ -20,6 +20,11 @@ import {
   EDIT_TOOL_NAME,
   EDIT_TOOL_PARAMETERS,
 } from "./direct/edit.js"
+import {
+  BASH_TOOL_DESCRIPTION,
+  BASH_TOOL_NAME,
+  BASH_TOOL_PARAMETERS,
+} from "./direct/bash.js"
 
 /**
  * Latency class drives the dispatch strategy in session.ts:
@@ -119,6 +124,13 @@ const EDIT_TOOL: RelayToolDefinition = {
   parameters: EDIT_TOOL_PARAMETERS as unknown as Record<string, unknown>,
 }
 
+const BASH_TOOL: RelayToolDefinition = {
+  name: BASH_TOOL_NAME,
+  description: BASH_TOOL_DESCRIPTION,
+  latencyClass: "streaming",
+  parameters: BASH_TOOL_PARAMETERS as unknown as Record<string, unknown>,
+}
+
 export function getRelayTools(config: SessionConfigEvent): RelayToolDefinition[] {
   const tools: RelayToolDefinition[] = [ECHO_TOOL]
 
@@ -134,6 +146,7 @@ export function getRelayTools(config: SessionConfigEvent): RelayToolDefinition[]
     tools.push(READ_TOOL)
     tools.push(WRITE_TOOL)
     tools.push(EDIT_TOOL)
+    tools.push(BASH_TOOL)
   }
 
   return tools
@@ -208,6 +221,7 @@ export function executeSyncTool(
     case READ_TOOL_NAME:
     case WRITE_TOOL_NAME:
     case EDIT_TOOL_NAME:
+    case BASH_TOOL_NAME:
       return null
     default:
       return JSON.stringify({ error: `unknown tool: ${name}` })

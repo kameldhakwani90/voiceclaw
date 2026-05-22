@@ -16,6 +16,7 @@ import { webSearch } from "./tools/web-search.js"
 import { runRead, READ_TOOL_NAME } from "./tools/direct/read.js"
 import { runWrite, WRITE_TOOL_NAME } from "./tools/direct/write.js"
 import { runEdit, EDIT_TOOL_NAME } from "./tools/direct/edit.js"
+import { runBash, BASH_TOOL_NAME } from "./tools/direct/bash.js"
 import { buildInstructions } from "./instructions.js"
 import { log, error as logError } from "./log.js"
 import { TurnTracer } from "./tracing/turn-tracer.js"
@@ -205,6 +206,10 @@ export class RelaySession {
     }
     if (name === "web_search") {
       this.handleAsyncWebSearch(callId, args)
+      return
+    }
+    if (name === BASH_TOOL_NAME) {
+      this.handleBashTool(callId, args)
       return
     }
     log(`[session:${this.id}] No async handler registered for tool: ${name}`)
@@ -579,6 +584,96 @@ export class RelaySession {
     this.tracer.endToolCall(callId, payload)
     this.emitToolCompleted(callId, WRITE_TOOL_NAME, payload)
     this.adapter?.sendToolResult(callId, payload)
+  }
+
+  private handleBashTool(callId: string, args: string) {
+    if (!this.config) return
+
+    let parsed: { command?: unknown, timeout_ms?: unknown }
+    try {
+      parsed = JSON.parse(args)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "invalid arguments"
+      const errorPayload = JSON.stringify({ error: msg })
+      this.tracer.endToolCall(callId, errorPayload, msg)
+      this.emitToolFailed(callId, BASH_TOOL_NAME, msg, false)
+      this.adapter?.sendToolResult(callId, errorPayload)
+      return
+    }
+    const command = typeof parsed.command === "string" ? parsed.command : ""
+    const timeoutMs = typeof parsed.timeout_ms === "number" ? parsed.timeout_ms : undefined
+
+    if (command.trim().length === 0) {
+      const msg = "command is required"
+      const errorPayload = JSON.stringify({ error: msg })
+      this.tracer.endToolCall(callId, errorPayload, msg)
+      this.emitToolFailed(callId, BASH_TOOL_NAME, msg, false)
+      this.adapter?.sendToolResult(callId, errorPayload)
+      return
+    }
+
+    const controller = new AbortController()
+    this.inFlightTools.set(callId, controller)
+
+    this.adapter?.sendToolResult(callId, JSON.stringify({
+      status: "running",
+      message: "Running that now. I'll narrate output as it arrives.",
+    }))
+
+    log(`[session:${this.id}] bash → ${command.slice(0, 120)}`)
+    const startedAt = Date.now()
+
+    runBash({ command, timeout_ms: timeoutMs }, {
+      signal: controller.signal,
+      onProgress: (event) => {
+        if (controller.signal.aborted) return
+        this.send({
+          type: "tool.progress",
+          callId,
+          textDelta: event.textDelta,
+          step: event.step,
+        })
+      },
+    }).then((result) => {
+      const durationMs = Date.now() - startedAt
+      log(`[session:${this.id}] bash completed in ${durationMs}ms`)
+      const payload = JSON.stringify(result)
+
+      if (controller.signal.aborted) {
+        this.tracer.endToolCall(callId, payload, "cancelled")
+        this.emitToolFailed(callId, BASH_TOOL_NAME, "cancelled", true)
+        return
+      }
+
+      if ("error" in result) {
+        this.tracer.endToolCall(callId, payload, result.error)
+        this.emitToolFailed(callId, BASH_TOOL_NAME, result.error, false)
+        this.adapter?.injectContext(
+          `[bash failed: ${result.error}]\nLet the user know the command didn't run and why.`,
+        )
+        return
+      }
+
+      this.tracer.endToolCall(callId, payload)
+      this.emitToolCompleted(callId, BASH_TOOL_NAME, payload)
+      this.adapter?.injectContext(
+        `[bash result for command: ${command.slice(0, 200)}]\n${payload}\n\nNarrate the outcome to the user.`,
+      )
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : "bash failed"
+      logError(`[session:${this.id}] bash error:`, message)
+      this.tracer.endToolCall(callId, JSON.stringify({ error: message }), message)
+      if (!controller.signal.aborted) {
+        this.emitToolFailed(callId, BASH_TOOL_NAME, message, false)
+        this.adapter?.injectContext(
+          `[bash failed: ${message}]\nLet the user know the command didn't run and why.`,
+        )
+      } else {
+        this.emitToolFailed(callId, BASH_TOOL_NAME, message, true)
+      }
+    }).finally(() => {
+      this.inFlightTools.delete(callId)
+    })
   }
 
   private handleAsyncWebSearch(callId: string, args: string) {
