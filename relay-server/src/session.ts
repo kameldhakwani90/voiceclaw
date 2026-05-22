@@ -15,6 +15,7 @@ import { askBrain } from "./tools/brain.js"
 import { webSearch } from "./tools/web-search.js"
 import { runRead, READ_TOOL_NAME } from "./tools/direct/read.js"
 import { runWrite, WRITE_TOOL_NAME } from "./tools/direct/write.js"
+import { runEdit, EDIT_TOOL_NAME } from "./tools/direct/edit.js"
 import { buildInstructions } from "./instructions.js"
 import { log, error as logError } from "./log.js"
 import { TurnTracer } from "./tracing/turn-tracer.js"
@@ -188,6 +189,10 @@ export class RelaySession {
     }
     if (name === WRITE_TOOL_NAME) {
       this.runWriteTool(callId, args)
+      return
+    }
+    if (name === EDIT_TOOL_NAME) {
+      this.runEditTool(callId, args)
       return
     }
     log(`[session:${this.id}] No blocking executor registered for tool: ${name}`)
@@ -504,6 +509,44 @@ export class RelaySession {
 
     this.tracer.endToolCall(callId, payload)
     this.emitToolCompleted(callId, READ_TOOL_NAME, payload)
+    this.adapter?.sendToolResult(callId, payload)
+  }
+
+  private async runEditTool(callId: string, args: string) {
+    let parsed: { path?: unknown, old_string?: unknown, new_string?: unknown, replace_all?: unknown }
+    try {
+      parsed = JSON.parse(args)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "invalid arguments"
+      const errorPayload = JSON.stringify({ error: msg })
+      this.tracer.endToolCall(callId, errorPayload, msg)
+      this.emitToolFailed(callId, EDIT_TOOL_NAME, msg, false)
+      this.adapter?.sendToolResult(callId, errorPayload)
+      return
+    }
+    const path = typeof parsed.path === "string" ? parsed.path : ""
+    const oldString = typeof parsed.old_string === "string" ? parsed.old_string : ""
+    const newString = typeof parsed.new_string === "string" ? parsed.new_string : ""
+    const replaceAll = parsed.replace_all === true
+
+    log(`[session:${this.id}] edit → ${path.slice(0, 120)} (old=${oldString.length}c, new=${newString.length}c${replaceAll ? ", replace_all" : ""})`)
+    const result = await runEdit({
+      path,
+      old_string: oldString,
+      new_string: newString,
+      replace_all: replaceAll,
+    })
+    const payload = JSON.stringify(result)
+
+    if ("error" in result) {
+      this.tracer.endToolCall(callId, payload, result.error)
+      this.emitToolFailed(callId, EDIT_TOOL_NAME, result.error, false)
+      this.adapter?.sendToolResult(callId, payload)
+      return
+    }
+
+    this.tracer.endToolCall(callId, payload)
+    this.emitToolCompleted(callId, EDIT_TOOL_NAME, payload)
     this.adapter?.sendToolResult(callId, payload)
   }
 
