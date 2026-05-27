@@ -134,21 +134,13 @@ const BASH_TOOL: RelayToolDefinition = {
 export function getRelayTools(config: SessionConfigEvent): RelayToolDefinition[] {
   const tools: RelayToolDefinition[] = [ECHO_TOOL]
 
-  // ask_brain is excluded when the realtime model is running with direct
-  // tools — that mode replaces the brain hop with read/write/edit/bash.
-  if (config.brainAgent !== "none" && !config.experimentalDirectTools) {
-    tools.push(ASK_BRAIN)
-  }
+  tools.push(READ_TOOL)
+  tools.push(WRITE_TOOL)
+  tools.push(EDIT_TOOL)
+  tools.push(BASH_TOOL)
 
   if (resolveTavilyKey(config)) {
     tools.push(WEB_SEARCH)
-  }
-
-  if (config.experimentalDirectTools) {
-    tools.push(READ_TOOL)
-    tools.push(WRITE_TOOL)
-    tools.push(EDIT_TOOL)
-    tools.push(BASH_TOOL)
   }
 
   return tools

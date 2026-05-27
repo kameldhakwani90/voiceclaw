@@ -8,6 +8,8 @@ import { Select } from '../components/ui/Select'
 import { Toggle } from '../components/ui/Toggle'
 import { ShortcutsCard } from '../components/ShortcutsCard'
 import { identityApi, onboarding } from '../lib/onboarding-api'
+
+const EXPERIMENTAL_DIRECT_TOOLS = true
 import { decodeVoicePreviewAudio } from '../lib/voice-preview'
 import { useTheme, type Theme } from '../lib/use-theme'
 import { enumerateAudioDevices, type AudioDevice } from '../lib/audio-engine'
@@ -534,7 +536,8 @@ export function SettingsPage() {
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
 
-        {/* Connection */}
+        {/* Connection — hidden when direct-tools experiment is active */}
+        {!EXPERIMENTAL_DIRECT_TOOLS && (
         <Card className="p-4 space-y-4">
           <h3 className="text-sm font-semibold text-foreground">Connection</h3>
 
@@ -583,6 +586,7 @@ export function SettingsPage() {
             </Button>
           </div>
         </Card>
+        )}
 
         {/* Identity */}
         <Card className="p-4 space-y-4">

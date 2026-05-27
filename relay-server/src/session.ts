@@ -863,12 +863,10 @@ export class RelaySession {
     // exist before buildInstructions reads them (and before the model gets
     // its first chance to call write/edit). Best-effort: failures here
     // shouldn't block the session, the tools will surface clearer errors.
-    if (config.experimentalDirectTools) {
-      try {
-        await ensureWorkspace()
-      } catch (err) {
-        logError(`[session:${this.id}] ensureWorkspace failed:`, err instanceof Error ? err.message : err)
-      }
+    try {
+      await ensureWorkspace()
+    } catch (err) {
+      logError(`[session:${this.id}] ensureWorkspace failed:`, err instanceof Error ? err.message : err)
     }
     // Capture the assembled system prompt so every voice-turn span carries the
     // full context Gemini / Grok Voice / OpenAI Realtime was configured with. Uses the same
