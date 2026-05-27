@@ -68,6 +68,8 @@ type Props = {
   onStartOver?: () => void
   initialProvider?: ProviderId
   previewMode?: boolean
+  stepNumber?: number
+  totalSteps?: number
 }
 
 export function StepProvider({
@@ -76,6 +78,8 @@ export function StepProvider({
   onStartOver,
   initialProvider = 'gemini',
   previewMode = false,
+  stepNumber = 4,
+  totalSteps = 6,
 }: Props) {
   const [selected, setSelected] = useState<ProviderId>(
     PROVIDERS.some((p) => p.id === initialProvider) ? initialProvider : 'gemini',
@@ -138,9 +142,9 @@ export function StepProvider({
 
   return (
     <StepFrame
-      stepIndex={4}
-      totalSteps={6}
-      eyebrow="04 / Voice provider"
+      stepIndex={stepNumber}
+      totalSteps={totalSteps}
+      eyebrow={`${String(stepNumber).padStart(2, '0')} / Voice provider`}
       title="Pick a voice. Paste a key."
       description="VoiceClaw doesn't keep your key. It goes straight into macOS Keychain on this machine, encrypted the way the OS encrypts your Wi-Fi passwords."
       primaryAction={{
