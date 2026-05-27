@@ -32,6 +32,17 @@ const PROVIDERS: Provider[] = [
     freeTier: 'Free tier available',
   },
   {
+    id: 'openai',
+    name: 'OpenAI Realtime',
+    tagline: 'OpenAI',
+    detail: 'The original realtime voice API. Rich tool support, predictable behavior.',
+    keyLink: 'https://platform.openai.com/api-keys',
+    keyLinkLabel: 'Get a key at platform.openai.com',
+    placeholder: 'sk-...',
+    prefix: 'OPENAI',
+    freeTier: 'Pay-as-you-go',
+  },
+  {
     id: 'xai',
     name: 'Grok Voice',
     tagline: 'xAI',
