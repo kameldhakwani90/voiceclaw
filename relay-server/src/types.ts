@@ -12,6 +12,8 @@ export type ClientEvent =
   | ToolResultEvent
   | ClientTimingEvent
   | TextInputEvent
+  | MintTokenEvent
+  | ToolExecEvent
 
 export interface SessionConfigEvent {
   type: "session.config"
@@ -125,6 +127,10 @@ export type RelayEvent =
   | ToolCancelledEvent
   | BrainResultEvent
   | ErrorEvent
+  | TokenEvent
+  | TokenErrorEvent
+  | StandaloneToolResultEvent
+  | StandaloneToolErrorEvent
 
 export interface SessionReadyEvent {
   type: "session.ready"
@@ -289,4 +295,63 @@ export interface ErrorEvent {
   actionUrl?: string | null
   actionLabel?: string
   httpStatus?: number | null
+}
+
+// "Direct to provider" capabilities — clients connecting straight to Gemini for
+// audio still talk to the relay for two things: minting an ephemeral provider
+// auth token (mint_token → token) and delegating tool execution back to the
+// desktop (tool.exec → tool.progress* → tool.result | tool.error). Both work
+// on the same /ws route and do NOT require session.config.
+
+export interface MintTokenEvent {
+  type: "mint_token"
+  provider: "gemini" | "openai" | "xai"
+  model?: string
+}
+
+export interface TokenEvent {
+  type: "token"
+  provider: "gemini"
+  token: string
+  // Wall-clock ms epoch at which the token stops being usable to start new
+  // sessions. Clients should refresh before this.
+  expiresAt: number
+  // true when the token is a freshly-minted short-lived auth_tokens.create
+  // result; false when the upstream API was unavailable and the relay fell
+  // back to handing the raw GEMINI_API_KEY through (dev/tailnet only).
+  ephemeral: boolean
+  model?: string
+}
+
+export interface TokenErrorEvent {
+  type: "token.error"
+  provider: "gemini" | "openai" | "xai"
+  message: string
+}
+
+export interface ToolExecEvent {
+  type: "tool.exec"
+  callId: string
+  name: "read" | "write" | "edit" | "bash"
+  // JSON-encoded argument object — same shape the in-session direct tools
+  // accept (read: {path, offset?, limit?}; write: {path, content};
+  // edit: {path, old_string, new_string, replace_all?};
+  // bash: {command, timeout_ms?, background?}).
+  arguments: string
+}
+
+export interface StandaloneToolResultEvent {
+  type: "tool.result"
+  callId: string
+  name: string
+  result: string
+  durationMs: number
+}
+
+export interface StandaloneToolErrorEvent {
+  type: "tool.error"
+  callId: string
+  name: string
+  error: string
+  durationMs?: number
 }

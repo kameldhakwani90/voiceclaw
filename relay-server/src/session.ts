@@ -17,6 +17,8 @@ import { runRead, READ_TOOL_NAME } from "./tools/direct/read.js"
 import { runWrite, WRITE_TOOL_NAME } from "./tools/direct/write.js"
 import { runEdit, EDIT_TOOL_NAME } from "./tools/direct/edit.js"
 import { runBash, BASH_TOOL_NAME } from "./tools/direct/bash.js"
+import { executeStandaloneTool, STANDALONE_TOOL_NAMES } from "./tools/exec-standalone.js"
+import { mintGeminiToken } from "./tools/mint-gemini-token.js"
 import { buildInstructions } from "./instructions.js"
 import { ensureWorkspace } from "./workspace.js"
 import { log, error as logError } from "./log.js"
@@ -829,9 +831,143 @@ export class RelaySession {
           this.adapter?.injectContext(event.text)
         }
         break
+      case "mint_token":
+        await this.handleMintToken(event.provider, event.model)
+        break
+      case "tool.exec":
+        this.handleStandaloneToolExec(event.callId, event.name, event.arguments)
+        break
       default:
         this.sendError(`unknown event type: ${(event as { type: string }).type}`, 400)
     }
+  }
+
+  // "Direct to provider" — mint a short-lived auth token for the mobile client
+  // so it can open its own Gemini Live WebSocket without ever seeing the
+  // long-lived GEMINI_API_KEY. Standalone: no session.config required.
+  private async handleMintToken(provider: string, model?: string) {
+    if (provider !== "gemini") {
+      this.send({
+        type: "token.error",
+        provider: provider as "openai" | "xai",
+        message: `direct mode not yet supported for ${provider}`,
+      })
+      return
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY ?? ""
+    if (apiKey.length === 0) {
+      logError(`[session:${this.id}] mint_token: GEMINI_API_KEY not set`)
+      this.send({
+        type: "token.error",
+        provider: "gemini",
+        message: "GEMINI_API_KEY is not set on the relay",
+      })
+      return
+    }
+
+    const result = await mintGeminiToken({ apiKey, model })
+    if (!result.ok) {
+      logError(`[session:${this.id}] mint_token: ${result.error}`)
+      this.send({ type: "token.error", provider: "gemini", message: result.error })
+      return
+    }
+
+    if (result.warning) {
+      log(`[session:${this.id}] mint_token: ${result.warning}`)
+    } else {
+      log(`[session:${this.id}] mint_token: minted ephemeral=${result.ephemeral} expiresAt=${result.expiresAt}`)
+    }
+
+    this.send({
+      type: "token",
+      provider: "gemini",
+      token: result.token,
+      expiresAt: result.expiresAt,
+      ephemeral: result.ephemeral,
+      model,
+    })
+  }
+
+  // "Direct to provider" — execute one tool on behalf of a mobile client that
+  // is talking straight to Gemini. Reuses runRead/runWrite/runEdit/runBash via
+  // executeStandaloneTool so the workspace, denylist, path-scoping, and
+  // timeout semantics are identical to the in-session path. Standalone: no
+  // session.config / adapter required.
+  private handleStandaloneToolExec(callId: string, name: string, args: string) {
+    if (typeof callId !== "string" || callId.length === 0) {
+      this.send({
+        type: "tool.error",
+        callId: callId ?? "",
+        name: name ?? "",
+        error: "callId is required",
+      })
+      return
+    }
+    if (!STANDALONE_TOOL_NAMES.has(name)) {
+      this.send({
+        type: "tool.error",
+        callId,
+        name,
+        error: `unknown tool: ${name}`,
+      })
+      return
+    }
+
+    const controller = new AbortController()
+    this.inFlightTools.set(callId, controller)
+
+    log(`[session:${this.id}] tool.exec → ${name} (callId=${callId})`)
+
+    executeStandaloneTool(name, args, {
+      signal: controller.signal,
+      onProgress: (event) => {
+        if (controller.signal.aborted) return
+        this.send({
+          type: "tool.progress",
+          callId,
+          textDelta: event.textDelta,
+          step: event.step,
+          summary: event.summary,
+        })
+      },
+    }).then((outcome) => {
+      if (controller.signal.aborted) {
+        log(`[session:${this.id}] tool.exec ${callId} aborted`)
+        this.send({
+          type: "tool.error",
+          callId,
+          name,
+          error: "cancelled",
+          durationMs: outcome.durationMs,
+        })
+        return
+      }
+
+      if (outcome.ok) {
+        this.send({
+          type: "tool.result",
+          callId,
+          name,
+          result: outcome.result,
+          durationMs: outcome.durationMs,
+        })
+      } else {
+        this.send({
+          type: "tool.error",
+          callId,
+          name,
+          error: outcome.error,
+          durationMs: outcome.durationMs,
+        })
+      }
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : "tool exec failed"
+      logError(`[session:${this.id}] tool.exec ${callId} error: ${message}`)
+      this.send({ type: "tool.error", callId, name, error: message })
+    }).finally(() => {
+      this.inFlightTools.delete(callId)
+    })
   }
 
   private async handleSessionConfig(config: SessionConfigEvent) {
