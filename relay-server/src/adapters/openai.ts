@@ -598,6 +598,24 @@ export class OpenAIAdapter implements ProviderAdapter {
         break
       }
 
+      // Audio output complete. xAI's beta dialect does not reliably emit
+      // response.done after a placeholder tool result (e.g. `{"status":
+      // "running"}`) is returned and the real result is later injected via
+      // conversation.item.create — the deferred response.create then strands
+      // and the model never speaks the real result. Use audio output
+      // completion as a backup flush signal so the injected tool result
+      // actually triggers the model to continue. OpenAI GA emits response.done
+      // reliably; the backup is gated on the xAI dialect to avoid racing the
+      // canonical lifecycle for OpenAI.
+      case "response.audio.done":
+      case "response.output_audio.done":
+        if (this.sessionFormat === "xai") {
+          this.isResponseActive = false
+          this.pendingResponseCancel = false
+          this.flushPendingResponseCreate()
+        }
+        break
+
       // Rate limits (log only)
       case "rate_limits.updated":
         break
@@ -609,8 +627,6 @@ export class OpenAIAdapter implements ProviderAdapter {
             event.type !== "input_audio_buffer.committed" &&
             event.type !== "input_audio_buffer.cleared" &&
             event.type !== "conversation.item.created" &&
-            event.type !== "response.audio.done" &&
-            event.type !== "response.output_audio.done" &&
             event.type !== "response.function_call_arguments.delta") {
           log(`[${this.providerName}] Unhandled event: ${event.type}`)
         }
