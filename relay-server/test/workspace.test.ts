@@ -4,13 +4,22 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   DEFAULT_AGENTS_MD,
+  DEFAULT_FACTS_MD,
+  DEFAULT_IDENTITY_MD,
+  DEFAULT_SOUL_MD,
   checkBashCommand,
   ensureWorkspace,
   formatDateYmd,
   getAgentsMdPath,
+  getFactsPath,
+  getIdentityPath,
   getMemoryDir,
+  getSoulPath,
   getWorkspaceRoot,
   loadRecentMemory,
+  readFactsSync,
+  readIdentitySync,
+  readSoulSync,
   resolveInsideWorkspace,
   resolveMemoryFile,
   verifyWrittenPathInside,
@@ -33,23 +42,44 @@ describe("workspace", () => {
   })
 
   describe("ensureWorkspace", () => {
-    it("creates workspace dir, memory dir, and default AGENTS.md when missing", async () => {
+    it("creates workspace dir, memory dir, and default AGENTS.md / IDENTITY.md / SOUL.md / FACTS.md when missing", async () => {
       await ensureWorkspace()
       expect(getWorkspaceRoot()).toBe(join(tmpRoot, "workspace"))
-      const agents = await readFile(getAgentsMdPath(), "utf-8")
-      expect(agents).toBe(DEFAULT_AGENTS_MD)
-      // memory dir is created
+      expect(await readFile(getAgentsMdPath(), "utf-8")).toBe(DEFAULT_AGENTS_MD)
+      expect(await readFile(getIdentityPath(), "utf-8")).toBe(DEFAULT_IDENTITY_MD)
+      expect(await readFile(getSoulPath(), "utf-8")).toBe(DEFAULT_SOUL_MD)
+      expect(await readFile(getFactsPath(), "utf-8")).toBe(DEFAULT_FACTS_MD)
       const memStat = await readFile(join(getMemoryDir(), ".gitkeep"), "utf-8").catch(() => null)
-      // No .gitkeep — just verify ensureWorkspace didn't throw and memory dir is usable.
       expect(memStat).toBeNull()
     })
 
-    it("does not overwrite an existing AGENTS.md", async () => {
+    it("does not overwrite existing seed files", async () => {
       await mkdir(join(tmpRoot, "workspace"), { recursive: true })
-      await writeFile(getAgentsMdPath(), "custom", "utf-8")
+      await writeFile(getAgentsMdPath(), "custom-agents", "utf-8")
+      await writeFile(getIdentityPath(), "custom-identity", "utf-8")
+      await writeFile(getSoulPath(), "custom-soul", "utf-8")
+      await writeFile(getFactsPath(), "custom-facts", "utf-8")
       await ensureWorkspace()
-      const agents = await readFile(getAgentsMdPath(), "utf-8")
-      expect(agents).toBe("custom")
+      expect(await readFile(getAgentsMdPath(), "utf-8")).toBe("custom-agents")
+      expect(await readFile(getIdentityPath(), "utf-8")).toBe("custom-identity")
+      expect(await readFile(getSoulPath(), "utf-8")).toBe("custom-soul")
+      expect(await readFile(getFactsPath(), "utf-8")).toBe("custom-facts")
+    })
+  })
+
+  describe("sync readers", () => {
+    it("return defaults when files are missing", () => {
+      expect(readIdentitySync()).toBe(DEFAULT_IDENTITY_MD)
+      expect(readSoulSync()).toBe(DEFAULT_SOUL_MD)
+      expect(readFactsSync()).toBe(DEFAULT_FACTS_MD)
+    })
+
+    it("return file contents after ensureWorkspace seeds them", async () => {
+      await ensureWorkspace()
+      await writeFile(getIdentityPath(), "# IDENTITY\n\n- **Name:** Pam\n", "utf-8")
+      await writeFile(getFactsPath(), "# Facts\n- lives in Toronto\n", "utf-8")
+      expect(readIdentitySync()).toContain("Name:** Pam")
+      expect(readFactsSync()).toContain("lives in Toronto")
     })
   })
 

@@ -138,12 +138,9 @@ describe("session tool-call blocking dispatch", () => {
     expect(isBlockingLatencyClass(tool!.latencyClass)).toBe(true)
   })
 
-  it("ask_brain is registered as slow latency (non-blocking)", () => {
+  it("ask_brain is not registered in direct-tools mode", () => {
     const config = makeConfig({})
-    const tool = findRelayTool(config, "ask_brain")
-    expect(tool).not.toBeNull()
-    expect(tool?.latencyClass).toBe("slow")
-    expect(isBlockingLatencyClass(tool!.latencyClass)).toBe(false)
+    expect(findRelayTool(config, "ask_brain")).toBeNull()
   })
 
   it("echo_tool is registered as fast latency (blocking)", () => {

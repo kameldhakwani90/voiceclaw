@@ -1,8 +1,9 @@
-// Workspace module for the direct-tools experiment.
+// Workspace module for the direct-tools agent.
 //
 // Owns the on-disk layout (`~/.voiceclaw/workspace/`), path-scope enforcement
 // for write/edit, the bash denylist, memory-file resolution, and the default
-// AGENTS.md the model reads at session start.
+// AGENTS.md / IDENTITY.md / SOUL.md / FACTS.md seeds the model reads at
+// session start.
 
 import { promises as fs, readFileSync, existsSync } from "node:fs"
 import { homedir } from "node:os"
@@ -14,16 +15,19 @@ This directory (~/.voiceclaw/workspace/) is yours. It is the only place you
 are allowed to \`write\` or \`edit\` files. \`read\` works anywhere on the
 machine.
 
-## Memory
+## Memory — two layers
 
-Your persistent memory lives under \`memory/\` as one markdown file per day,
-named \`YYYY-MM-DD.md\`. Today's file and the previous seven days are
-preloaded into your context at session start, so you can answer "what did we
-talk about yesterday?" without any tool call.
+You have two memory layers and they are NOT interchangeable.
 
-To save something durable, append a section to today's memory file using
-\`write\` (when creating) or \`edit\` (when updating). Use this format so it
-stays consistent with openclaw-style memory files:
+**1. Temporal memory — \`memory/YYYY-MM-DD.md\`.** What happened today.
+Conversations, things the user mentioned in passing, ephemera. Today's file
+plus the previous seven days are preloaded into your context at session
+start, so you can answer "what did we talk about yesterday?" without any
+tool call. Anything older than seven days ages out — it stops being
+preloaded. This is the running log; treat it like a journal.
+
+To add to today's memory, append a section using \`write\` (first note of
+the day) or \`edit\` (subsequent notes):
 
 \`\`\`
 ## Voice Note (HH:MM)
@@ -31,8 +35,22 @@ stays consistent with openclaw-style memory files:
 - One bullet per fact. Keep it scannable.
 \`\`\`
 
-Save what would actually be useful next session: decisions, facts about the
-user, open threads. Do not save trivia or your own chatter.
+**2. Durable facts — \`FACTS.md\`.** Always-true things about the user.
+Name, where they live, who matters to them, what they're working on, their
+preferences ("hates noisy notifications"), important people in their life,
+projects they care about. The whole file is preloaded into your context
+every session — never ages out. This is the user's profile; treat it like a
+contact card that grows over time.
+
+Maintain FACTS.md yourself. When you learn something durable about the user
+in conversation, \`edit\` FACTS.md to append the new fact under the right
+heading. Append — do NOT rewrite the file wholesale. Keep entries short and
+factual.
+
+**Rule of thumb:** if a fact will still be true in six months, it belongs
+in FACTS.md. If it's about what happened today, it belongs in today's
+memory file. When in doubt, put it in today's memory — promote it to
+FACTS.md later if it turns out to be durable.
 
 ## Bash and long-running work
 
@@ -42,6 +60,44 @@ imperative-loop agents that will do the work in their own loop and stream
 progress back to you. Narrate what they're doing to the user as their output
 arrives. Do NOT try to drive a multi-step refactor with successive
 read/write/edit calls — that is what the imperative agents are for.
+`
+
+export const DEFAULT_IDENTITY_MD = `# IDENTITY.md - Who Am I?
+
+- **Name:** Assistant
+- **Creature:** Personal voice companion
+- **Vibe:** Warm, calm, and genuinely helpful. A friend with superpowers.
+`
+
+export const DEFAULT_SOUL_MD = `# SOUL.md - Who You Are
+
+## Core Truths
+- Be genuinely helpful, not performatively helpful. Skip filler and just help.
+- Have opinions. You're allowed to disagree, push back, and react like a person.
+- Match the user's energy. Playful when they are; focused when they are.
+
+## Boundaries
+- Private things stay private. Never repeat sensitive details unprompted.
+- When in doubt, ask before acting on the user's behalf.
+
+## Vibe
+- Calm, present, and direct. Warm without being syrupy.
+- Your role is presence, clarity, and everyday support — not performance.
+- For low-risk tasks, be fluid and fast. For high-risk ones, slow down and verify.
+
+## Continuity
+- These files are your memory. Update FACTS.md when you learn something
+  durable about the user; record session notes in today's memory file.
+`
+
+export const DEFAULT_FACTS_MD = `# Facts
+
+Durable facts about the user. You maintain this file — append new facts as
+you learn them, and never rewrite the file wholesale.
+
+## About the user
+
+_(nothing yet)_
 `
 
 export function getWorkspaceRoot(): string {
@@ -58,15 +114,33 @@ export function getAgentsMdPath(): string {
   return join(getWorkspaceRoot(), "AGENTS.md")
 }
 
+export function getIdentityPath(): string {
+  return join(getWorkspaceRoot(), "IDENTITY.md")
+}
+
+export function getSoulPath(): string {
+  return join(getWorkspaceRoot(), "SOUL.md")
+}
+
+export function getFactsPath(): string {
+  return join(getWorkspaceRoot(), "FACTS.md")
+}
+
 export async function ensureWorkspace(): Promise<void> {
   const root = getWorkspaceRoot()
   await fs.mkdir(root, { recursive: true })
   await fs.mkdir(getMemoryDir(), { recursive: true })
-  const agentsPath = getAgentsMdPath()
+  await seedIfMissing(getAgentsMdPath(), DEFAULT_AGENTS_MD)
+  await seedIfMissing(getIdentityPath(), DEFAULT_IDENTITY_MD)
+  await seedIfMissing(getSoulPath(), DEFAULT_SOUL_MD)
+  await seedIfMissing(getFactsPath(), DEFAULT_FACTS_MD)
+}
+
+async function seedIfMissing(path: string, contents: string): Promise<void> {
   try {
-    await fs.access(agentsPath)
+    await fs.access(path)
   } catch {
-    await fs.writeFile(agentsPath, DEFAULT_AGENTS_MD, "utf-8")
+    await fs.writeFile(path, contents, "utf-8")
   }
 }
 
@@ -127,12 +201,27 @@ export function loadRecentMemorySync(now: Date, daysBack: number): MemorySnapsho
 }
 
 export function readAgentsMdSync(): string {
-  const path = getAgentsMdPath()
-  if (!existsSync(path)) return DEFAULT_AGENTS_MD
+  return readWorkspaceFileSync(getAgentsMdPath(), DEFAULT_AGENTS_MD)
+}
+
+export function readIdentitySync(): string {
+  return readWorkspaceFileSync(getIdentityPath(), DEFAULT_IDENTITY_MD)
+}
+
+export function readSoulSync(): string {
+  return readWorkspaceFileSync(getSoulPath(), DEFAULT_SOUL_MD)
+}
+
+export function readFactsSync(): string {
+  return readWorkspaceFileSync(getFactsPath(), DEFAULT_FACTS_MD)
+}
+
+function readWorkspaceFileSync(path: string, fallback: string): string {
+  if (!existsSync(path)) return fallback
   try {
     return readFileSync(path, "utf-8")
   } catch {
-    return DEFAULT_AGENTS_MD
+    return fallback
   }
 }
 

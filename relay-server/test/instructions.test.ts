@@ -3,7 +3,15 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { buildInstructions } from "../src/instructions.js"
-import { ensureWorkspace, getMemoryDir, getAgentsMdPath, getWorkspaceRoot } from "../src/workspace.js"
+import {
+  ensureWorkspace,
+  getAgentsMdPath,
+  getFactsPath,
+  getIdentityPath,
+  getMemoryDir,
+  getSoulPath,
+  getWorkspaceRoot,
+} from "../src/workspace.js"
 import type { SessionConfigEvent } from "../src/types.js"
 
 function makeConfig(overrides: Partial<SessionConfigEvent> = {}): SessionConfigEvent {
@@ -17,7 +25,7 @@ function makeConfig(overrides: Partial<SessionConfigEvent> = {}): SessionConfigE
   }
 }
 
-describe("buildInstructions — direct-tools mode", () => {
+describe("buildInstructions", () => {
   let tmpRoot: string
   let prevEnv: string | undefined
 
@@ -34,14 +42,8 @@ describe("buildInstructions — direct-tools mode", () => {
     await rm(tmpRoot, { recursive: true, force: true })
   })
 
-  it("does NOT include the direct-tools preamble when the flag is off", () => {
-    const instructions = buildInstructions(makeConfig({ experimentalDirectTools: false }))
-    expect(instructions).not.toMatch(/Your direct tools/)
-    expect(instructions).not.toMatch(/Workspace context/)
-  })
-
-  it("includes the direct-tools preamble when the flag is on", () => {
-    const instructions = buildInstructions(makeConfig({ experimentalDirectTools: true }))
+  it("includes the direct-tools preamble unconditionally", () => {
+    const instructions = buildInstructions(makeConfig())
     expect(instructions).toMatch(/Your direct tools/)
     expect(instructions).toMatch(/read.*to inspect files/i)
     expect(instructions).toMatch(/write.*and.*edit/i)
@@ -49,10 +51,40 @@ describe("buildInstructions — direct-tools mode", () => {
     expect(instructions).toMatch(/web_search/)
   })
 
-  it("includes the workspace context section with AGENTS.md and memory", async () => {
-    // Custom AGENTS.md
+  it("loads the agent name from IDENTITY.md into the identity block", async () => {
+    await writeFile(
+      getIdentityPath(),
+      "# IDENTITY.md\n\n- **Name:** Pam\n- **Vibe:** Calm and warm.\n",
+      "utf-8",
+    )
+    const instructions = buildInstructions(makeConfig({ provider: "gemini" }))
+    expect(instructions).toMatch(/You are Pam/)
+  })
+
+  it("loads SOUL.md into the identity block unconditionally", async () => {
+    await writeFile(
+      getSoulPath(),
+      "# SOUL.md\n\n## Core Truths\n\nMARKER-CORE-TRUTH\n",
+      "utf-8",
+    )
+    const instructions = buildInstructions(makeConfig({ provider: "gemini" }))
+    expect(instructions).toMatch(/MARKER-CORE-TRUTH/)
+  })
+
+  it("preloads FACTS.md inside the workspace context section", async () => {
+    await writeFile(
+      getFactsPath(),
+      "# Facts\n\n- Lives in Toronto.\n- Loves cycling.\n",
+      "utf-8",
+    )
+    const instructions = buildInstructions(makeConfig())
+    expect(instructions).toMatch(/Known facts \(FACTS\.md\)/)
+    expect(instructions).toMatch(/Lives in Toronto/)
+    expect(instructions).toMatch(/Loves cycling/)
+  })
+
+  it("preloads recent memory files and excludes anything older than 7 days", async () => {
     await writeFile(getAgentsMdPath(), "MY-AGENTS-MARKER\n", "utf-8")
-    // Three memory files: today, two days ago, ten days ago (the last should be excluded).
     const today = new Date()
     const ymd = (d: Date) => {
       const y = d.getFullYear().toString().padStart(4, "0")
@@ -70,33 +102,30 @@ describe("buildInstructions — direct-tools mode", () => {
     await writeMemory(2, "TWO-DAYS-NOTE")
     await writeMemory(10, "TEN-DAYS-NOTE")
 
-    const instructions = buildInstructions(makeConfig({ experimentalDirectTools: true }))
+    const instructions = buildInstructions(makeConfig())
     expect(instructions).toMatch(/Workspace context \(preloaded\)/)
     expect(instructions).toMatch(/MY-AGENTS-MARKER/)
     expect(instructions).toMatch(/TODAY-NOTE/)
     expect(instructions).toMatch(/TWO-DAYS-NOTE/)
-    // Older than 7 days — must not appear
     expect(instructions).not.toMatch(/TEN-DAYS-NOTE/)
   })
 
-  it("shows a stub when no memory files exist", () => {
-    const instructions = buildInstructions(makeConfig({ experimentalDirectTools: true }))
+  it("shows a memory stub when no memory files exist", () => {
+    const instructions = buildInstructions(makeConfig())
     expect(instructions).toMatch(/No memory files yet/)
   })
 
-  it("flag-off path is unchanged: produces the same instructions across calls", () => {
-    const a = buildInstructions(makeConfig({ experimentalDirectTools: false }))
-    const b = buildInstructions(makeConfig({ experimentalDirectTools: false }))
-    expect(a).toBe(b)
-  })
-
-  it("uses the default AGENTS.md if the file is somehow missing", async () => {
-    // Wipe the AGENTS.md file
+  it("falls back to the default AGENTS.md if the file is somehow missing", async () => {
     await rm(getAgentsMdPath(), { force: true })
-    const instructions = buildInstructions(makeConfig({ experimentalDirectTools: true }))
-    // Default AGENTS.md mentions the workspace path
+    const instructions = buildInstructions(makeConfig())
     expect(instructions).toMatch(/Voiceclaw Agent Workspace/)
     expect(instructions).toMatch(/~\/\.voiceclaw\/workspace/)
     void getWorkspaceRoot
+  })
+
+  it("produces stable output across repeated calls with the same workspace state", () => {
+    const a = buildInstructions(makeConfig())
+    const b = buildInstructions(makeConfig())
+    expect(a).toBe(b)
   })
 })

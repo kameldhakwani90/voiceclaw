@@ -1,18 +1,17 @@
-// Build the system instructions for the STS session
-// Loads agent identity from brain agent workspace, adds conversation rules and context
+// Build the system instructions for the STS session.
+// Loads agent identity from ~/.voiceclaw/workspace/ (IDENTITY.md, SOUL.md)
+// and preloads FACTS.md + recent memory into the workspace context section.
 
-import { readFileSync, existsSync } from "node:fs"
 import { createHash } from "node:crypto"
-import { join } from "node:path"
-import { homedir } from "node:os"
 import type { SessionConfigEvent } from "./types.js"
-import { hasNonBlockingTool } from "./tools/index.js"
-import { loadRecentMemorySync, readAgentsMdSync } from "./workspace.js"
-import { log, warn } from "./log.js"
-
-const BRAIN_WORKSPACE = process.env.BRAIN_WORKSPACE
-  || process.env.OPENCLAW_WORKSPACE  // backward compat
-  || join(homedir(), ".openclaw", "workspace")
+import {
+  loadRecentMemorySync,
+  readAgentsMdSync,
+  readFactsSync,
+  readIdentitySync,
+  readSoulSync,
+} from "./workspace.js"
+import { log } from "./log.js"
 
 const CONVERSATION_RULES = `
 ## Conversation Rules
@@ -44,57 +43,6 @@ const CONVERSATION_RULES = `
 - Don't ask "anything else?" — instead, bring up the next relevant topic from context.
 `.trim()
 
-const BRAIN_INTRO = `
-## Your Brain (ask_brain tool)
-
-You have an ask_brain tool that connects to your brain agent. Your brain is where ALL of your capabilities live. You MUST use it for anything beyond basic conversation. Your brain can:
-- **Memory**: Remember things about the user, recall past conversations and decisions
-- **Calendar**: Check schedule, create events, find availability
-- **Tasks**: Create, list, and manage tasks and to-dos
-- **Web browsing**: Read URLs, articles, documentation — send the URL in your query
-- **Knowledge**: Look up information, research topics, answer factual questions
-- **File operations**: Read and write files, generate images
-
-When in doubt, ask your brain. You are a voice interface to a powerful agent — don't try to answer from your own limited context when your brain has the full picture.
-
-**NEVER say "I can't do that" or "I don't have access to that" before checking with your brain.** You don't know your own capabilities — your brain does. Always try first. Say "Let me see what I can do..." and ask your brain. Only after the brain confirms something is impossible should you tell the user.
-`.trim()
-
-const BRAIN_ASYNC_RULES = `
-## MANDATORY: Wait for action confirmations
-
-**Every ask_brain call is asynchronous and takes 5–20 seconds.** When you call ask_brain you immediately receive a placeholder ("Looking into it now…") — that is NOT the answer. The real result arrives later as a separate Brain agent result message in your context. Do not confuse the placeholder for the result.
-
-Whether the call is a question (look up info, check calendar) or an action (open a link, send a message, create an event), the same wait applies. For actions specifically, **never claim it's done before you see the confirmation**:
-
-- **While the call is in flight**, say something neutral that does NOT imply completion: "On it...", "Sending that now...", "Pulling it up...". Past-tense claims ("Opened", "Sent", "Done", "Booked") are forbidden until you actually see a confirmation.
-- **A confirmation is a Brain agent result message in your context** containing words like "Opened", "Sent", "Done", a link, an event ID, or other proof of completion. Until that lands, the action is still pending.
-- **If you don't see a confirmation within ~25 seconds**, ask the brain "did that go through?" rather than guessing.
-- **If the user asks "is it done?" before the confirmation arrives**, say "still pulling it up — give me a sec" rather than fabricating completion.
-
-This rule applies to ALL action verbs: open, send, create, book, schedule, message, delete, update, post, share, save. If the user asked you to *do* something, treat the response as pending until proven otherwise.
-`.trim()
-
-const BRAIN_MEMORY_RULES_BASE = `
-## MANDATORY: Memory and History Queries
-
-**This is a hard rule with zero exceptions.** You do NOT have memory of past conversations. You do NOT know what happened earlier, yesterday, last week, or in any prior session. Your conversation context only contains the current session.
-
-When the user asks ANYTHING about:
-- What you worked on, discussed, or talked about (today, earlier, recently, last time, etc.)
-- Recaps, summaries, or reviews of past work or conversations
-- What happened, what was decided, what was agreed on
-- Prior tasks, action items, or things to remember
-- Previous conversations or sessions
-- Anything the user told you before or that you should remember
-
-You MUST call ask_brain FIRST. Say "Let me check on that..." and call the tool. Do NOT answer from your own knowledge or make anything up. Do NOT synthesize a plausible answer. Do NOT guess. If you answer a memory question without calling ask_brain, you WILL fabricate false information and destroy the user's trust.
-
-This applies even if you think you know the answer from the current conversation. Your brain has the complete history — you do not.
-`.trim()
-
-const BRAIN_MEMORY_ASYNC_TAIL = `**While ask_brain is still running** (5–20 seconds), do NOT start composing the answer in any form — no "Today we talked about…", no "I think we covered…", no warm-up sentence that begins answering. Two reasons: (1) you don't have the answer yet, and (2) anything you say in that gap is invention. Acceptable: short verbal bridges ("let me check…", "pulling it up…", "one sec…", brief silence). Unacceptable: any sentence whose meaning depends on the answer you don't yet have. Wait until the Brain agent result message lands in your context, then speak from it.`
-
 const DIRECT_TOOLS_PREAMBLE = `
 ## Your direct tools
 
@@ -113,17 +61,9 @@ You have direct tools on the user's machine. No brain hop, no out-of-process age
 export function buildInstructions(config: SessionConfigEvent): string {
   const parts: string[] = []
 
-  if (config.brainAgent !== "none") {
-    const identity = loadAgentIdentity(config.provider)
-    log(`[instructions] Loaded agent identity (${identity.length} chars): ${identity.substring(0, 100)}...`)
-    parts.push(identity)
-    // In direct-tools mode, the realtime model no longer has ask_brain — its
-    // capabilities come from read/write/edit/bash. The BRAIN_* sections
-    // would actively mislead it (e.g., telling it to defer memory queries
-    // when memory is preloaded), so skip them.
-  } else {
-    parts.push("You are a helpful voice assistant. Keep your responses conversational and concise.")
-  }
+  const identity = loadAgentIdentity(config.provider)
+  log(`[instructions] Loaded agent identity (${identity.length} chars): ${identity.substring(0, 100)}...`)
+  parts.push(identity)
 
   parts.push(DIRECT_TOOLS_PREAMBLE)
   parts.push(buildWorkspaceContextSection())
@@ -164,6 +104,7 @@ export function buildInstructions(config: SessionConfigEvent): string {
 
 function buildWorkspaceContextSection(): string {
   const agentsMd = readAgentsMdSync()
+  const facts = readFactsSync()
   const memory = loadRecentMemorySync(new Date(), 7)
   const memorySections = memory.length === 0
     ? "_No memory files yet. Create today's file by calling `write` on `memory/YYYY-MM-DD.md` with a `## Voice Note (HH:MM)` section._"
@@ -178,6 +119,10 @@ function buildWorkspaceContextSection(): string {
     "",
     agentsMd.trim(),
     "",
+    "### Known facts (FACTS.md)",
+    "",
+    facts.trim(),
+    "",
     "### Recent memory (today + last 7 days)",
     "",
     memorySections,
@@ -186,43 +131,30 @@ function buildWorkspaceContextSection(): string {
 
 function loadAgentIdentity(provider: SessionConfigEvent["provider"]): string {
   const profile = loadAgentProfile()
-  const soul = loadFile("SOUL.md")
+  const soul = readSoulSync()
 
   if (provider === "openai" || provider === "xai") {
     return buildOpenAIVoiceIdentity(profile, soul)
   }
 
-  if (soul) {
-    // Strip meta lines that don't apply to voice (markdown links, "this file is yours" footer)
-    const cleaned = soul
-      .replace(/^#.*\n/m, "") // remove top-level heading
-      .replace(/Want a sharper version\?.*\n/g, "")
-      .replace(/---[\s\S]*$/, "") // remove trailing --- and everything after
-      .trim()
+  const cleaned = soul
+    .replace(/^#.*\n/m, "")
+    .replace(/Want a sharper version\?.*\n/g, "")
+    .replace(/---[\s\S]*$/, "")
+    .trim()
 
+  if (cleaned) {
     return `You are ${profile.name}, a personal AI assistant in voice mode. You are the same ${profile.name} from text chat, just speaking instead of typing.\n\n${cleaned}`
   }
-
   return `You are ${profile.name}, a personal AI assistant in voice mode. Keep your responses conversational and concise.`
 }
 
 function loadAgentProfile() {
-  const identity = loadFile("IDENTITY.md")
+  const identity = readIdentitySync()
   return {
     name: readIdentityField(identity, "Name") || "Assistant",
     creature: readIdentityField(identity, "Creature"),
     vibe: readIdentityField(identity, "Vibe"),
-  }
-}
-
-function loadFile(filename: string): string | null {
-  const path = join(BRAIN_WORKSPACE, filename)
-  if (!existsSync(path)) return null
-  try {
-    return readFileSync(path, "utf-8")
-  } catch {
-    warn(`[instructions] Failed to read ${path}`)
-    return null
   }
 }
 

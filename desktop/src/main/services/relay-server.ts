@@ -84,6 +84,7 @@ const FORWARDED_KEYS = [
   'TRACING_UI_COLLECTOR_URL',
   'GIT_SHA',
   'RELAY_VERSION',
+  'VOICECLAW_WORKSPACE',
 ] as const
 
 const PROVIDER_ENV_KEYS: Record<ProviderId, string> = {
