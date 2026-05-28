@@ -131,6 +131,7 @@ export class RelaySession {
     }
 
     if (event.type === "tool.call" && this.isServerSideTool(event.name)) {
+      this.send(event)
       this.handleServerToolCall(event.callId, event.name, event.arguments)
       return
     }
