@@ -5,22 +5,16 @@ import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { Text } from '@/components/ui/text'
-import { addMessage, createConversation, getLatestConversation, getMessages, getSetting, type Message, type LatencyData, type ProviderInfo } from '@/db'
-import { getApiConfig, streamRealtimeText } from '@/lib/chat'
+import { addMessage, createConversation, getLatestConversation, getMessages, getSetting, type Message, type ProviderInfo } from '@/db'
+import { streamRealtimeText } from '@/lib/chat'
 import { BRAND } from '@/lib/brand'
-import { compactMessages } from '@/lib/compact'
 import { useConversationContext } from '@/lib/conversation-context'
 import { maybeGenerateTitle } from '@/lib/title'
 import { useCallSounds } from '@/lib/sounds'
-import { usePipeline } from '@/lib/use-pipeline'
 import { useRealtime, getProviderForRealtimeModel, type RmsMetrics } from '@/lib/use-realtime'
 import { DEFAULT_REALTIME_SERVER_URL } from '@/lib/relay-config'
-import { useTranscriptBuffer } from '@/lib/use-transcript-buffer'
 import { useAutoReconnect } from '@/lib/use-auto-reconnect'
-import ExpoCustomPipelineModule from '@/modules/expo-custom-pipeline/src/ExpoCustomPipelineModule'
 import ExpoRealtimeAudioModule from '@/modules/expo-realtime-audio/src/ExpoRealtimeAudioModule'
-import ExpoVapiModule from '@/modules/expo-vapi'
-import type { FunctionCallEvent, SpeechEvent, TranscriptEvent } from '@/modules/expo-vapi'
 import { Stack } from 'expo-router'
 import { MicIcon, MicOffIcon, PhoneOffIcon, PlusIcon, RefreshCwIcon, SendIcon, XIcon } from 'lucide-react-native'
 import { useColorScheme } from 'nativewind'
@@ -53,75 +47,10 @@ const OPENAI_REALTIME_VOICES = [
   'verse',
 ] as const
 
-const VOICE_SYSTEM_PROMPT = `\
-You are on a live voice call. Keep responses concise and conversational — short \
-sentences, natural speech. No bullet lists, no code blocks. Speak like a human \
-in a phone call. Your identity, personality, and capabilities are defined in \
-your system files.
-
-For long-running tasks (image generation, web searches, file operations, etc.), \
-delegate to a sub-agent so the user gets an immediate response and can keep \
-talking. Acknowledge the request quickly ("On it, generating that now") and let \
-the background work complete asynchronously.
-
-When sharing images or URLs, include them as markdown (e.g. ![description](url)) \
-but never speak the URL aloud — just describe what you created or found.
-
-## Display Tool
-
-You have a \`displayText\` function that writes content to the user's screen \
-WITHOUT it being spoken aloud. Use it for:
-- URLs, links, or code snippets
-- Long text the user asked you to write (emails, summaries, lists)
-- Image markdown (![desc](url))
-- Any content better read than heard
-
-After calling displayText, briefly tell the user verbally, e.g. "I've put that \
-on your screen" or "Check your display". Keep the spoken part short — the detail \
-is on screen.`
-
-const DISPLAY_TEXT_FUNCTION = {
-  name: 'displayText',
-  description: 'Write content to the user\'s screen without it being spoken aloud by TTS. Use for URLs, code, long text, images, or anything better read than heard.',
-  parameters: {
-    type: 'object',
-    properties: {
-      text: {
-        type: 'string',
-        description: 'The content to display. Supports markdown including image syntax ![alt](url).',
-      },
-      title: {
-        type: 'string',
-        description: 'Optional short title shown above the content.',
-      },
-    },
-    required: ['text'],
-  },
-}
-
 type ContentPart = { type: 'text', text: string } | { type: 'image', url: string, alt: string }
-type PipelineDebugPhase = 'idle' | 'listening' | 'thinking' | 'speaking'
 type DisplayItem =
   | { kind: 'message', message: Message }
   | { kind: 'tool_call', item: ToolCallItem }
-
-const INITIAL_PIPELINE_DEBUG_STATE = {
-  phase: 'idle' as PipelineDebugPhase,
-  transcriptCount: 0,
-  llmTokenCount: 0,
-  llmCompleteCount: 0,
-  assistantResponseCount: 0,
-  speakRequestCount: 0,
-  ttsStartCount: 0,
-  errorCount: 0,
-  interruptCount: 0,
-  ttsProvider: 'unknown',
-  lastUserTranscript: 'none',
-  lastLLMText: 'none',
-  lastAssistantResponse: 'none',
-  lastSpeakRequest: 'none',
-  lastError: 'none',
-}
 
 export default function ChatScreen() {
   const { colorScheme } = useColorScheme()
@@ -145,165 +74,16 @@ export default function ChatScreen() {
   const soundsRef = useRef({ playJoin, playEnd, startThinking, stopThinking })
   soundsRef.current = { playJoin, playEnd, startThinking, stopThinking }
   const { selectedConversationId, clearSelection } = useConversationContext()
-  const userInitiatedEndRef = useRef(false)
-  const wasCallActiveRef = useRef(false)
-  const lastCallOverridesRef = useRef<Record<string, unknown> | null>(null)
-  const lastAssistantIdRef = useRef<string | null>(null)
-  const pendingLatencyRef = useRef<LatencyData | null>(null)
-  const activeVoiceModeRef = useRef<'vapi' | 'custom' | 'realtime'>('realtime')
   const activeProvidersRef = useRef<ProviderInfo | null>(null)
   const cancelReconnectRef = useRef<(() => void) | null>(null)
   const triggerReconnectRef = useRef<(() => void) | null>(null)
-  const [pipelineDebugState, setPipelineDebugState] = useState(INITIAL_PIPELINE_DEBUG_STATE)
   const [rmsMetrics, setRmsMetrics] = useState<RmsMetrics | null>(null)
   const conversationIdRef = useRef<number | null>(null)
   conversationIdRef.current = conversationId
 
-  // Vapi latency tracking refs
-  const vapiUserSpeechEndTimeRef = useRef<number | null>(null)
-  const vapiUserFinalTranscriptTimeRef = useRef<number | null>(null)
-  const vapiAssistantFirstTokenTimeRef = useRef<number | null>(null)
-  const vapiPendingLatencyRef = useRef<LatencyData>({})
-
   // Refs for pipeline callbacks that need fresh closure values
   const loadMessagesRef = useRef<() => Promise<void>>(async () => {})
   const startRealtimeCallRef = useRef<() => Promise<boolean>>(async () => false)
-
-  const resetPipelineDebugState = useCallback(() => {
-    setPipelineDebugState(INITIAL_PIPELINE_DEBUG_STATE)
-  }, [])
-
-  const setPipelineDebugPhase = useCallback((phase: PipelineDebugPhase) => {
-    setPipelineDebugState((current) => ({ ...current, phase }))
-  }, [])
-
-  const simulatePipelineTranscript = useCallback((text: string) => {
-    if (!isCallActive || activeVoiceModeRef.current !== 'custom') return
-    ExpoCustomPipelineModule.simulateFinalTranscript(text)
-  }, [isCallActive])
-
-  const pipeline = usePipeline({
-    getConversationId: () => conversationIdRef.current,
-    buildMessages: async (userText) => {
-      const convId = conversationIdRef.current
-      if (!convId) return [{ role: 'user', content: userText }]
-
-      const { apiKey, apiUrl, model } = await getApiConfig()
-      if (!apiKey || !apiUrl) return [{ role: 'user', content: userText }]
-
-      const dbMessages = await getMessages(convId)
-      const compacted = await compactMessages(convId, dbMessages, apiKey, model, apiUrl)
-      const llmMessages = compacted
-        .filter((message) => message.role === 'user' || message.role === 'assistant')
-        .map((message) => ({ role: message.role, content: message.content }))
-
-      const lastMessage = llmMessages[llmMessages.length - 1]
-      if (lastMessage?.role === 'user' && lastMessage.content === userText) {
-        return llmMessages
-      }
-
-      return [...llmMessages, { role: 'user', content: userText }]
-    },
-    onPartialTranscript: (text) => {
-      setStreamingRole('user')
-      setStreamingText(text)
-      setPipelineDebugPhase('listening')
-    },
-    onFinalTranscript: (text) => {
-      console.log('[CustomPipeline] Final transcript:', text?.substring(0, 50))
-      setStreamingText(null)
-      setPipelineDebugState((current) => ({
-        ...current,
-        phase: 'thinking',
-        transcriptCount: current.transcriptCount + 1,
-        lastUserTranscript: text,
-      }))
-      const convId = conversationIdRef.current
-      if (convId) {
-        addMessage(convId, 'user', text, undefined, activeProvidersRef.current ?? undefined).then(() => {
-          loadMessagesRef.current()
-          maybeGenerateTitle(convId)
-        })
-      }
-      setIsThinking(true)
-      soundsRef.current.startThinking()
-    },
-    onLLMToken: (text) => {
-      setStreamingRole('assistant')
-      setStreamingText(text)
-      setIsThinking(false)
-      soundsRef.current.stopThinking()
-      setPipelineDebugState((current) => ({
-        ...current,
-        llmTokenCount: current.llmTokenCount + 1,
-        lastLLMText: text,
-      }))
-    },
-    onLLMComplete: (text) => {
-      setPipelineDebugState((current) => ({
-        ...current,
-        llmCompleteCount: current.llmCompleteCount + 1,
-        lastLLMText: text || '<empty>',
-      }))
-    },
-    onAssistantResponse: (text) => {
-      console.log('[CustomPipeline] Assistant response:', text?.substring(0, 50))
-      setIsThinking(false)
-      setStreamingText(null)
-      soundsRef.current.stopThinking()
-      setPipelineDebugState((current) => ({
-        ...current,
-        assistantResponseCount: current.assistantResponseCount + 1,
-        lastAssistantResponse: text || '<empty>',
-      }))
-      const convId = conversationIdRef.current
-      if (convId && text) {
-        addMessage(convId, 'assistant', text, pendingLatencyRef.current ?? undefined, activeProvidersRef.current ?? undefined).then(() => {
-          pendingLatencyRef.current = null
-          loadMessagesRef.current()
-        })
-      }
-    },
-    onSpeakRequested: (text) => {
-      setPipelineDebugState((current) => ({
-        ...current,
-        speakRequestCount: current.speakRequestCount + 1,
-        lastSpeakRequest: text,
-      }))
-    },
-    onTTSStart: () => {
-      console.log('[CustomPipeline] TTS started')
-      setIsThinking(false)
-      soundsRef.current.stopThinking()
-      setPipelineDebugState((current) => ({
-        ...current,
-        phase: 'speaking',
-        ttsStartCount: current.ttsStartCount + 1,
-      }))
-    },
-    onTTSComplete: () => {
-      console.log('[CustomPipeline] TTS complete')
-    },
-    onError: (message) => {
-      console.error('[CustomPipeline]', message)
-      setIsThinking(false)
-      setStreamingText(null)
-      soundsRef.current.stopThinking()
-      setPipelineDebugPhase('idle')
-      setPipelineDebugState((current) => ({
-        ...current,
-        errorCount: current.errorCount + 1,
-        lastError: message,
-      }))
-      const convId = conversationIdRef.current
-      if (convId) {
-        addMessage(convId, 'assistant', `Error: ${message}`).then(() => loadMessagesRef.current())
-      }
-    },
-    onLatencyUpdate: (latency) => {
-      pendingLatencyRef.current = latency
-    },
-  })
 
   const realtime = useRealtime({
     onSessionReady: (sessionId) => {
@@ -427,66 +207,14 @@ export default function ChatScreen() {
   }, [conversationId])
   loadMessagesRef.current = loadMessages
 
-  const handleTranscriptFlush = useCallback(async (role: 'user' | 'assistant', text: string) => {
-    if (!conversationId) return
-    if (__DEV__) console.log('[Chat] Transcript flush:', role, text.substring(0, 50))
-    try {
-      // Attach latency data to assistant messages from Custom Pipeline
-      const latency = role === 'assistant' ? pendingLatencyRef.current ?? undefined : undefined
-      if (role === 'assistant') pendingLatencyRef.current = null
-      await addMessage(conversationId, role, text, latency, activeProvidersRef.current ?? undefined)
-      await loadMessages()
-      maybeGenerateTitle(conversationId)
-    } catch (err) {
-      console.warn('[Chat] Failed to flush transcript:', err)
-    }
-  }, [conversationId, loadMessages])
-
-  const transcriptBuffer = useTranscriptBuffer({ onFlush: handleTranscriptFlush })
-  const transcriptBufferRef = useRef(transcriptBuffer)
-  transcriptBufferRef.current = transcriptBuffer
-
   const reconnectCall = useCallback(async () => {
-    const voiceMode = activeVoiceModeRef.current
-
-    if (voiceMode === 'realtime') {
-      console.log('[Chat] Reconnecting Realtime session')
-      setIsConnecting(true)
-      try {
-        const success = await startRealtimeCallRef.current()
-        if (!success) throw new Error('Realtime reconnect failed')
-      } catch (e) {
-        setIsConnecting(false)
-        throw e
-      }
-      return
-    }
-
-    // Vapi reconnect
-    const assistantId = lastAssistantIdRef.current
-    if (!assistantId) {
-      throw new Error('No previous call configuration to reconnect with')
-    }
-    const overrides = lastCallOverridesRef.current
+    console.log('[Chat] Reconnecting Realtime session')
     setIsConnecting(true)
-
-    // Safety timeout: reset isConnecting if onCallStart never fires after reconnect
-    if (connectingTimeoutRef.current) clearTimeout(connectingTimeoutRef.current)
-    connectingTimeoutRef.current = setTimeout(() => {
-      setIsConnecting((current) => {
-        if (current) console.warn('[Chat] Reconnect connecting timed out after 15s, resetting state')
-        return false
-      })
-    }, 15_000)
-
     try {
-      await ExpoVapiModule.startCall(assistantId, overrides ?? undefined)
+      const success = await startRealtimeCallRef.current()
+      if (!success) throw new Error('Realtime reconnect failed')
     } catch (e) {
       setIsConnecting(false)
-      if (connectingTimeoutRef.current) {
-        clearTimeout(connectingTimeoutRef.current)
-        connectingTimeoutRef.current = null
-      }
       throw e
     }
   }, [])
@@ -496,174 +224,6 @@ export default function ChatScreen() {
   })
   cancelReconnectRef.current = cancelReconnect
   triggerReconnectRef.current = triggerReconnect
-
-  useEffect(() => {
-    const subs = [
-      ExpoVapiModule.addListener('onCallStart', () => {
-        console.log('[Chat] onCallStart fired')
-        if (connectingTimeoutRef.current) {
-          clearTimeout(connectingTimeoutRef.current)
-          connectingTimeoutRef.current = null
-        }
-        setIsCallActive(true)
-        setIsConnecting(false)
-        wasCallActiveRef.current = true
-        cancelReconnect()
-        soundsRef.current.playJoin()
-        // Reset Vapi latency tracking for fresh call
-        vapiUserSpeechEndTimeRef.current = null
-        vapiUserFinalTranscriptTimeRef.current = null
-        vapiAssistantFirstTokenTimeRef.current = null
-        vapiPendingLatencyRef.current = {}
-      }),
-      ExpoVapiModule.addListener('onCallEnd', async () => {
-        console.log('[Chat] onCallEnd fired')
-        if (connectingTimeoutRef.current) {
-          clearTimeout(connectingTimeoutRef.current)
-          connectingTimeoutRef.current = null
-        }
-        const wasActive = wasCallActiveRef.current
-        const wasUserInitiated = userInitiatedEndRef.current
-
-        // Store any accumulated Vapi latency before flushing
-        const vapiLatency = vapiPendingLatencyRef.current
-        if (vapiLatency.sttLatencyMs != null || vapiLatency.llmLatencyMs != null || vapiLatency.ttsLatencyMs != null) {
-          pendingLatencyRef.current = { ...vapiLatency }
-        }
-        vapiPendingLatencyRef.current = {}
-
-        // Flush any in-progress transcript buffers before cleanup
-        if (conversationId) {
-          const pending = transcriptBufferRef.current.flushAll()
-          for (const { role, text } of pending) {
-            console.log('[Chat] Flushing buffered transcript on call end:', role, text.substring(0, 50))
-            const latency = role === 'assistant' ? pendingLatencyRef.current ?? undefined : undefined
-            if (role === 'assistant') pendingLatencyRef.current = null
-            await addMessage(conversationId, role, text, latency, activeProvidersRef.current ?? undefined)
-          }
-          if (pending.length > 0) {
-            loadMessages()
-            maybeGenerateTitle(conversationId)
-          }
-        }
-
-        setIsCallActive(false)
-        setIsMuted(false)
-        setIsThinking(false)
-        setIsConnecting(false)
-        wasCallActiveRef.current = false
-        userInitiatedEndRef.current = false
-        activeProvidersRef.current = null
-        soundsRef.current.stopThinking()
-
-        if (wasActive && !wasUserInitiated) {
-          // Unexpected disconnect -- attempt auto-reconnect
-          console.log('[Chat] Unexpected disconnect detected, triggering auto-reconnect')
-          triggerReconnect()
-        } else {
-          // User-initiated end -- normal cleanup
-          soundsRef.current.playEnd()
-        }
-      }),
-      ExpoVapiModule.addListener('onTranscript', (event: TranscriptEvent) => {
-        console.log('[Chat] onTranscript:', event.role, event.type, event.text?.substring(0, 50))
-        if (event.type === 'final') {
-          transcriptBufferRef.current.onTranscriptFinal(event.role, event.text)
-        }
-
-        // Vapi latency tracking
-        if (event.type === 'final' && event.role === 'user') {
-          // STT latency: time from user speech end to final user transcript
-          if (vapiUserSpeechEndTimeRef.current != null) {
-            vapiPendingLatencyRef.current.sttLatencyMs = Date.now() - vapiUserSpeechEndTimeRef.current
-            vapiUserSpeechEndTimeRef.current = null
-          }
-          vapiUserFinalTranscriptTimeRef.current = Date.now()
-          // Reset assistant first-token tracker for the new turn
-          vapiAssistantFirstTokenTimeRef.current = null
-        }
-
-        if (event.role === 'assistant' && vapiAssistantFirstTokenTimeRef.current == null) {
-          // LLM latency: time from user's final transcript to first assistant output
-          if (vapiUserFinalTranscriptTimeRef.current != null) {
-            vapiPendingLatencyRef.current.llmLatencyMs = Date.now() - vapiUserFinalTranscriptTimeRef.current
-            vapiUserFinalTranscriptTimeRef.current = null
-          }
-          vapiAssistantFirstTokenTimeRef.current = Date.now()
-        }
-      }),
-      ExpoVapiModule.addListener('onSpeechStart', (event: SpeechEvent) => {
-        transcriptBufferRef.current.onSpeechStart(event.role)
-        if (event.role === 'assistant') {
-          setIsThinking(false)
-          soundsRef.current.stopThinking()
-          // Vapi latency tracking
-          const now = Date.now()
-          if (vapiAssistantFirstTokenTimeRef.current != null) {
-            // TTS latency: time from first assistant text to speech start
-            vapiPendingLatencyRef.current.ttsLatencyMs = now - vapiAssistantFirstTokenTimeRef.current
-          } else if (vapiUserFinalTranscriptTimeRef.current != null) {
-            // Speech started before any transcript -- count full time as LLM latency
-            vapiPendingLatencyRef.current.llmLatencyMs = now - vapiUserFinalTranscriptTimeRef.current
-            vapiUserFinalTranscriptTimeRef.current = null
-            vapiAssistantFirstTokenTimeRef.current = now
-          }
-        }
-      }),
-      ExpoVapiModule.addListener('onSpeechEnd', (event: SpeechEvent) => {
-        transcriptBufferRef.current.onSpeechEnd(event.role)
-        if (event.role === 'user') {
-          setIsThinking(true)
-          soundsRef.current.startThinking()
-          // Vapi latency: mark when user stopped speaking (STT timer starts)
-          vapiUserSpeechEndTimeRef.current = Date.now()
-        }
-        if (event.role === 'assistant') {
-          // Vapi latency: assistant turn is done — store accumulated latency for flush
-          const latency = vapiPendingLatencyRef.current
-          if (latency.sttLatencyMs != null || latency.llmLatencyMs != null || latency.ttsLatencyMs != null) {
-            pendingLatencyRef.current = { ...latency }
-          }
-          // Reset for next turn
-          vapiPendingLatencyRef.current = {}
-          vapiAssistantFirstTokenTimeRef.current = null
-        }
-      }),
-      ExpoVapiModule.addListener('onFunctionCall', async (event: FunctionCallEvent) => {
-        if (event.name === 'displayText' && conversationId) {
-          const text = (event.parameters.text as string) || ''
-          const title = event.parameters.title as string | undefined
-          const displayContent = title ? `**${title}**\n\n${text}` : text
-          await addMessage(conversationId, 'assistant', displayContent)
-          loadMessages()
-
-          try {
-            await ExpoVapiModule.sendFunctionCallResult(
-              'displayText',
-              JSON.stringify({ status: 'displayed', length: text.length })
-            )
-          } catch (e) {
-            console.warn('[DisplayText] Failed to send function call result:', e)
-          }
-        }
-      }),
-      ExpoVapiModule.addListener('onError', async (event) => {
-        console.error('[Vapi]', event.message)
-        setIsConnecting(false)
-        if (connectingTimeoutRef.current) {
-          clearTimeout(connectingTimeoutRef.current)
-          connectingTimeoutRef.current = null
-        }
-        setIsThinking(false)
-        soundsRef.current.stopThinking()
-        if (conversationId) {
-          await addMessage(conversationId, 'assistant', `Error: ${event.message}`)
-          loadMessages()
-        }
-      }),
-    ]
-    return () => subs.forEach((s) => s.remove())
-  }, [conversationId, cancelReconnect, triggerReconnect])
 
   const startNewConversation = useCallback(async () => {
     hasScrolledRef.current = false
@@ -773,32 +333,13 @@ export default function ChatScreen() {
     })
   }, [inputText, conversationId, loadMessages])
 
-  const connectingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    return () => {
-      if (connectingTimeoutRef.current) {
-        clearTimeout(connectingTimeoutRef.current)
-        connectingTimeoutRef.current = null
-      }
-    }
-  }, [])
-
   const toggleCall = useCallback(async () => {
     if (isCallActive) {
-      userInitiatedEndRef.current = true
       cancelReconnect()
-      if (activeVoiceModeRef.current === 'realtime') {
-        stopRealtimeCall()
-      } else if (activeVoiceModeRef.current === 'custom') {
-        stopCustomPipeline()
-      } else {
-        await ExpoVapiModule.stopCall()
-      }
+      stopRealtimeCall()
       return
     }
 
-    // Disable the button immediately to prevent double-tap
     setIsConnecting(true)
     let callStarted = false
 
@@ -808,7 +349,6 @@ export default function ChatScreen() {
         return
       }
 
-      activeVoiceModeRef.current = 'realtime'
       callStarted = await startRealtimeCall()
     } catch (e: any) {
       const errorMsg = e?.message || String(e)
@@ -820,24 +360,9 @@ export default function ChatScreen() {
     } finally {
       if (!callStarted) {
         setIsConnecting(false)
-        if (connectingTimeoutRef.current) {
-          clearTimeout(connectingTimeoutRef.current)
-          connectingTimeoutRef.current = null
-        }
       }
     }
   }, [isCallActive, conversationId, loadMessages])
-
-  const stopCustomPipeline = useCallback(() => {
-    pipeline.stop()
-    activeProvidersRef.current = null
-    setIsCallActive(false)
-    setIsMuted(false)
-    setIsThinking(false)
-    setPipelineDebugPhase('idle')
-    soundsRef.current.stopThinking()
-    soundsRef.current.playEnd()
-  }, [pipeline, setPipelineDebugPhase])
 
   const startRealtimeCall = useCallback(async (): Promise<boolean> => {
     if (!conversationId) return false
@@ -879,10 +404,9 @@ export default function ChatScreen() {
     const locale = Intl.DateTimeFormat().resolvedOptions().locale
 
     const allMessages = await getMessages(conversationId)
-    // Send the full message history — the relay splits it into recent
-    // verbatim turns + a summary of older messages. Cap at 200 messages
-    // (~100 turns) so a runaway conversation can't inflate the session.config
-    // payload past a reasonable wire-size budget.
+    // Cap at 200 messages so a runaway conversation can't inflate the
+    // session.config payload past a reasonable wire-size budget — the relay
+    // splits this into recent verbatim turns plus a summary of older ones.
     const recentMessages = allMessages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .slice(-200)
@@ -924,23 +448,9 @@ export default function ChatScreen() {
     soundsRef.current.playEnd()
   }, [realtime, cancelReconnect])
 
-  const handlePipelineInterrupt = useCallback(() => {
-    setPipelineDebugState((current) => ({
-      ...current,
-      phase: 'listening',
-      interruptCount: current.interruptCount + 1,
-    }))
-    pipeline.interrupt()
-  }, [pipeline])
-
   const toggleMute = useCallback(async () => {
     const newMuted = !isMuted
-    const voiceMode = activeVoiceModeRef.current
-    if (voiceMode === 'realtime') {
-      realtime.setMuted(newMuted)
-    } else {
-      await ExpoVapiModule.setMuted(newMuted)
-    }
+    realtime.setMuted(newMuted)
     setIsMuted(newMuted)
   }, [isMuted, realtime])
 
@@ -954,8 +464,6 @@ export default function ChatScreen() {
   }
 
   const displayItems = buildDisplayItems(baseMessages, toolCalls)
-
-  const { partials } = transcriptBuffer
 
   return (
     <KeyboardAvoidingView
@@ -1008,15 +516,6 @@ export default function ChatScreen() {
             </Text>
           </View>
         }
-        ListFooterComponent={
-          partials.length > 0 ? (
-            <View>
-              {partials.map((p) => (
-                <PartialBubble key={p.role} role={p.role} text={p.text} />
-              ))}
-            </View>
-          ) : null
-        }
       />
 
       {reconnectState.status === 'reconnecting' && (
@@ -1052,15 +551,9 @@ export default function ChatScreen() {
 
       {isCallActive && (
         <View testID="call-controls" className="flex-row items-center justify-center gap-4 border-t border-border bg-muted/50 px-4 py-3">
-          {activeVoiceModeRef.current === 'custom' ? (
-            <Button testID="interrupt-button" variant="secondary" size="icon" className="rounded-full" onPress={handlePipelineInterrupt}>
-              <Icon as={MicIcon} size={20} className="text-foreground" />
-            </Button>
-          ) : (
-            <Button testID="mute-button" variant={isMuted ? 'destructive' : 'secondary'} size="icon" className="rounded-full" onPress={toggleMute}>
-              <Icon as={isMuted ? MicOffIcon : MicIcon} size={20} className="text-foreground" />
-            </Button>
-          )}
+          <Button testID="mute-button" variant={isMuted ? 'destructive' : 'secondary'} size="icon" className="rounded-full" onPress={toggleMute}>
+            <Icon as={isMuted ? MicOffIcon : MicIcon} size={20} className="text-foreground" />
+          </Button>
           <Button testID="end-call-button" variant="destructive" className="rounded-full px-6" onPress={toggleCall}>
             <Icon as={PhoneOffIcon} size={20} className="text-destructive-foreground" />
             <Text className="ml-2 text-destructive-foreground">End Call</Text>
@@ -1068,70 +561,7 @@ export default function ChatScreen() {
         </View>
       )}
 
-      {debugMode && isCallActive && activeVoiceModeRef.current === 'custom' && (
-        <View testID="pipeline-debug-panel" className="gap-2 border-t border-dashed border-border bg-background px-4 py-3">
-          <Text testID="pipeline-debug-phase" className="text-xs text-muted-foreground">
-            phase:{pipelineDebugState.phase}
-          </Text>
-          <View className="flex-row flex-wrap gap-3">
-            <Text testID="pipeline-debug-transcript-count" className="text-xs text-muted-foreground">
-              transcripts:{pipelineDebugState.transcriptCount}
-            </Text>
-            <Text testID="pipeline-debug-llm-token-count" className="text-xs text-muted-foreground">
-              llmTokens:{pipelineDebugState.llmTokenCount}
-            </Text>
-            <Text testID="pipeline-debug-llm-complete-count" className="text-xs text-muted-foreground">
-              llmDone:{pipelineDebugState.llmCompleteCount}
-            </Text>
-            <Text testID="pipeline-debug-assistant-count" className="text-xs text-muted-foreground">
-              responses:{pipelineDebugState.assistantResponseCount}
-            </Text>
-            <Text testID="pipeline-debug-speak-count" className="text-xs text-muted-foreground">
-              speak:{pipelineDebugState.speakRequestCount}
-            </Text>
-            <Text testID="pipeline-debug-tts-count" className="text-xs text-muted-foreground">
-              tts:{pipelineDebugState.ttsStartCount}
-            </Text>
-            <Text testID="pipeline-debug-error-count" className="text-xs text-muted-foreground">
-              errors:{pipelineDebugState.errorCount}
-            </Text>
-            <Text testID="pipeline-debug-interrupt-count" className="text-xs text-muted-foreground">
-              interrupts:{pipelineDebugState.interruptCount}
-            </Text>
-          </View>
-          <Text testID="pipeline-debug-tts-provider" className="text-xs text-muted-foreground" numberOfLines={1}>
-            ttsProvider:{pipelineDebugState.ttsProvider}
-          </Text>
-          <Text testID="pipeline-debug-last-user" className="text-xs text-muted-foreground" numberOfLines={2}>
-            user:{pipelineDebugState.lastUserTranscript}
-          </Text>
-          <Text testID="pipeline-debug-last-llm" className="text-xs text-muted-foreground" numberOfLines={3}>
-            llm:{pipelineDebugState.lastLLMText}
-          </Text>
-          <Text testID="pipeline-debug-last-assistant" className="text-xs text-muted-foreground" numberOfLines={3}>
-            assistant:{pipelineDebugState.lastAssistantResponse}
-          </Text>
-          <Text testID="pipeline-debug-last-speak" className="text-xs text-muted-foreground" numberOfLines={3}>
-            speak:{pipelineDebugState.lastSpeakRequest}
-          </Text>
-          <Text testID="pipeline-debug-last-error" className="text-xs text-muted-foreground" numberOfLines={3}>
-            error:{pipelineDebugState.lastError}
-          </Text>
-          <View className="flex-row flex-wrap gap-2">
-            <Button testID="simulate-short-transcript-button" variant="secondary" size="sm" onPress={() => simulatePipelineTranscript('Say hello in one short sentence.')}>
-              <Text className="text-xs text-foreground">Short Turn</Text>
-            </Button>
-            <Button testID="simulate-long-transcript-button" variant="secondary" size="sm" onPress={() => simulatePipelineTranscript('Tell me a long story about a dragon. Make it at least 5 sentences.')}>
-              <Text className="text-xs text-foreground">Long Turn</Text>
-            </Button>
-            <Button testID="simulate-interrupt-transcript-button" variant="secondary" size="sm" onPress={() => simulatePipelineTranscript('Actually stop the dragon story and reply with exactly: redirect successful.')}>
-              <Text className="text-xs text-foreground">Redirect Turn</Text>
-            </Button>
-          </View>
-        </View>
-      )}
-
-      {debugMode && isCallActive && activeVoiceModeRef.current === 'realtime' && rmsMetrics && (
+      {debugMode && isCallActive && rmsMetrics && (
         <View testID="rms-debug-panel" className="gap-2 border-t border-dashed border-border bg-background px-4 py-3">
           <Text className="text-xs font-semibold text-muted-foreground">Audio Debug</Text>
           <View className="flex-row items-center gap-2">
@@ -1221,23 +651,6 @@ function buildDisplayItems(messages: Message[], toolCalls: Map<string, ToolCallI
     return aTime - bTime
   })
   return items
-}
-
-function PartialBubble({ role, text }: { role: 'user' | 'assistant', text: string }) {
-  const isUser = role === 'user'
-  return (
-    <View className={`mb-3 px-4 ${isUser ? 'items-end' : 'items-start'}`}>
-      <View
-        className={`max-w-[80%] rounded-md px-4 py-3 ${
-          isUser ? 'bg-primary/70' : 'border border-border bg-card'
-        }`}>
-        <Text
-          className={`text-sm italic ${isUser ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
-          {text}
-        </Text>
-      </View>
-    </View>
-  )
 }
 
 function ThinkingDots() {

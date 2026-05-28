@@ -19,7 +19,6 @@ import { ActivityIndicator, Animated, KeyboardAvoidingView, Platform, Pressable,
 import Slider from '@react-native-community/slider'
 import { useColorScheme } from 'nativewind'
 
-type VoiceMode = 'vapi' | 'custom' | 'realtime'
 type STTProviderValue = 'apple' | 'deepgram'
 type TTSProviderValue = 'apple' | 'elevenlabs' | 'openai' | 'kokoro'
 
@@ -89,9 +88,6 @@ export default function SettingsScreen() {
   const { colorScheme } = useColorScheme()
   const palette = colorScheme === 'dark' ? BRAND.colors.dark : BRAND.colors.light
   const stageColors = getStageColors(colorScheme)
-  const [vapiPublicKey, setVapiPublicKey] = useState('')
-  const [assistantId, setAssistantId] = useState('')
-  const [defaultModel, setDefaultModel] = useState('openclaw:voice')
   const [systemPrompt, setSystemPrompt] = useState('You are a helpful assistant. Keep responses concise. Use markdown for formatting and images when appropriate. Your identity, personality, and capabilities are defined in your system files.')
 
   // Brain agent connection mode
@@ -101,7 +97,6 @@ export default function SettingsScreen() {
   const [pluginStatus, setPluginStatus] = useState<PluginConnectionStatus>('disconnected')
 
   // Voice Pipeline state
-  const [voiceMode, setVoiceMode] = useState<VoiceMode>('realtime')
   const [sttProvider, setSttProvider] = useState<STTProviderValue>('apple')
   const [ttsProvider, setTtsProvider] = useState<TTSProviderValue>('apple')
   const [deepgramApiKey, setDeepgramApiKey] = useState('')
@@ -153,14 +148,12 @@ export default function SettingsScreen() {
     elevenlabs: 'idle',
     deepgram: 'idle',
     openai_tts: 'idle',
-    vapi: 'idle',
   })
   const [validationErrors, setValidationErrors] = useState<Record<Provider, string | undefined>>({
     brain: undefined,
     elevenlabs: undefined,
     deepgram: undefined,
     openai_tts: undefined,
-    vapi: undefined,
   })
 
   // Auto-save: guard against saving during initial load
@@ -220,12 +213,6 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     ;(async () => {
-      const key = (await getSetting('vapi_public_key')) || (await getSetting('vapi_api_key'))
-      const assistant = await getSetting('assistant_id')
-      const model = await getSetting('default_model')
-      if (key) setVapiPublicKey(key)
-      if (assistant) setAssistantId(assistant)
-      if (model) setDefaultModel(model)
       const cm = (await getSetting('brain_connection_mode')) || (await getSetting('openclaw_connection_mode'))
       if (cm === 'http' || cm === 'plugin') setConnectionMode(cm)
       const gw = (await getSetting('brain_gateway_url')) || (await getSetting('openclaw_gateway_url'))
@@ -235,13 +222,11 @@ export default function SettingsScreen() {
       const sp = await getSetting('system_prompt')
       if (sp) setSystemPrompt(sp)
 
-      // Load voice pipeline settings
+      // Force-migrate legacy voice_mode values (vapi/custom) → realtime so existing
+      // installs land on the only supported mode.
       const vm = await getSetting('voice_mode')
       if (vm !== 'realtime') {
-        setVoiceMode('realtime')
         await setSetting('voice_mode', 'realtime')
-      } else {
-        setVoiceMode('realtime')
       }
       const rtUrl = await getSetting('realtime_server_url')
       if (rtUrl) setRealtimeServerUrl(rtUrl)
@@ -400,23 +385,6 @@ export default function SettingsScreen() {
       setRealtimeTestError(`${result.detail}\nurl=${wsUrl}`)
     }
   }, [realtimeServerUrl])
-
-  // Debounced save for text inputs
-  const updateVapiPublicKey = useCallback((v: string) => {
-    setVapiPublicKey(v)
-    resetValidation('vapi')
-    if (loadedRef.current) saveDebounced('vapi_public_key', v)
-  }, [saveDebounced, resetValidation])
-
-  const updateAssistantId = useCallback((v: string) => {
-    setAssistantId(v)
-    if (loadedRef.current) saveDebounced('assistant_id', v)
-  }, [saveDebounced])
-
-  const updateDefaultModel = useCallback((v: string) => {
-    setDefaultModel(v)
-    if (loadedRef.current) saveDebounced('default_model', v)
-  }, [saveDebounced])
 
   const updateConnectionMode = useCallback((v: BrainConnectionMode) => {
     setConnectionMode(v)
