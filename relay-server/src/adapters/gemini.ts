@@ -121,6 +121,15 @@ export class GeminiAdapter implements ProviderAdapter {
   private firstModelTextAtMs: number | null = null
   private turnWasInterrupted = false
 
+  // Gemini Live defaults to START_OF_ACTIVITY_INTERRUPTS, so any frame its VAD
+  // flags as speech truncates the current model turn. Client-side echo cancellation
+  // is imperfect — residual TTS bleeds back through the mic and Gemini transcribes
+  // it as the user speaking, causing the model to interrupt ITSELF. While model
+  // audio is in flight we stop forwarding mic frames upstream. Real barge-in still
+  // works on the next turn (the flag clears the moment the model stops emitting).
+  private assistantSpeaking = false
+  private droppedMicFramesWhileSpeaking = 0
+
   async connect(config: SessionConfigEvent, sendToClient: SendToClient): Promise<void> {
     this.sendToClient = sendToClient
     this.config = config
@@ -422,6 +431,14 @@ export class GeminiAdapter implements ProviderAdapter {
   }
 
   sendAudio(data: string) {
+    if (this.assistantSpeaking) {
+      this.droppedMicFramesWhileSpeaking++
+      // Coarse log so a hung mic-gate state is debuggable without flooding logs.
+      if (this.droppedMicFramesWhileSpeaking % 100 === 1) {
+        log(`[gemini] mic gated while assistant speaking (dropped=${this.droppedMicFramesWhileSpeaking})`)
+      }
+      return
+    }
     // Client sends 24kHz PCM16, Gemini needs 16kHz PCM16
     const downsampled = downsample24to16(data)
     this.sendUpstream({
@@ -756,6 +773,20 @@ export class GeminiAdapter implements ProviderAdapter {
     if (content.generationComplete) log(`[gemini] generationComplete`)
     if (content.turnComplete) log(`[gemini] turnComplete`)
 
+    // Re-open the mic as soon as the model is done emitting audio. generationComplete
+    // is the earliest reliable signal that no more audio frames are coming for this
+    // turn; turnComplete and interrupted also clear it as a belt-and-suspenders for
+    // shapes where generationComplete is omitted.
+    if (content.generationComplete || content.turnComplete || content.interrupted) {
+      if (this.assistantSpeaking) {
+        if (this.droppedMicFramesWhileSpeaking > 0) {
+          log(`[gemini] mic re-opened (dropped ${this.droppedMicFramesWhileSpeaking} echo-window frames)`)
+        }
+        this.assistantSpeaking = false
+        this.droppedMicFramesWhileSpeaking = 0
+      }
+    }
+
     // Any generation-side activity means the resumed session's turn controller
     // is healthy — cancel the post-resume watchdog.
     if (content.modelTurn || content.outputTranscription || content.turnComplete || content.generationComplete) {
@@ -769,6 +800,10 @@ export class GeminiAdapter implements ProviderAdapter {
         if (part.inlineData) {
           if (this.firstModelAudioAtMs == null) {
             this.firstModelAudioAtMs = Date.now()
+          }
+          if (!this.assistantSpeaking) {
+            this.assistantSpeaking = true
+            this.droppedMicFramesWhileSpeaking = 0
           }
           this.sendToClient?.({ type: "audio.delta", data: part.inlineData.data })
           this.resetWatchdog()
@@ -1110,6 +1145,8 @@ export class GeminiAdapter implements ProviderAdapter {
     this.firstModelAudioAtMs = null
     this.firstModelTextAtMs = null
     this.turnWasInterrupted = false
+    this.assistantSpeaking = false
+    this.droppedMicFramesWhileSpeaking = 0
   }
 
   private emitLatencyMetrics() {
