@@ -7,7 +7,7 @@ import { Input } from '../components/ui/Input'
 import { Select } from '../components/ui/Select'
 import { Toggle } from '../components/ui/Toggle'
 import { ShortcutsCard } from '../components/ShortcutsCard'
-import { identityApi, onboarding } from '../lib/onboarding-api'
+import { identityApi, onboarding, providerApi, type ProviderId } from '../lib/onboarding-api'
 
 const EXPERIMENTAL_DIRECT_TOOLS = true
 import { decodeVoicePreviewAudio } from '../lib/voice-preview'
@@ -82,6 +82,35 @@ const REALTIME_MODELS: readonly RealtimeModel[] = [
   'gpt-realtime-mini',
 ]
 
+const PROVIDER_ORDER: readonly ProviderId[] = ['gemini', 'openai', 'xai']
+
+const PROVIDER_LABELS: Record<ProviderId, string> = {
+  gemini: 'Gemini',
+  openai: 'OpenAI',
+  xai: 'xAI / Grok',
+}
+
+const PROVIDER_KEY_META: Record<
+  ProviderId,
+  { url: string; linkLabel: string; placeholder: string }
+> = {
+  gemini: {
+    url: 'https://aistudio.google.com/apikey',
+    linkLabel: 'aistudio.google.com',
+    placeholder: 'AIza...',
+  },
+  openai: {
+    url: 'https://platform.openai.com/api-keys',
+    linkLabel: 'platform.openai.com',
+    placeholder: 'sk-...',
+  },
+  xai: {
+    url: 'https://console.x.ai',
+    linkLabel: 'console.x.ai',
+    placeholder: 'xai-...',
+  },
+}
+
 export function SettingsPage() {
   const { theme, setTheme } = useTheme()
 
@@ -106,6 +135,12 @@ export function SettingsPage() {
   // Model + Voice
   const [model, setModel] = useState<RealtimeModel>('gemini-3.1-flash-live-preview')
   const [voice, setVoice] = useState<string>('Zephyr')
+
+  // Per-provider realtime API keys (Keychain-backed via main process).
+  // We never read the secret back into the UI — only the list of which
+  // providers currently have a key set, so we can render a "configured"
+  // indicator and let the user overwrite.
+  const [configuredProviders, setConfiguredProviders] = useState<ProviderId[]>([])
 
   // Audio
   const [volume, setVolume] = useState(1.0)
@@ -211,10 +246,26 @@ export function SettingsPage() {
       const optedOut = await isOptedOutRenderer()
       setTelemetryEnabled(!optedOut)
 
+      try {
+        const configured = await providerApi.listConfigured()
+        setConfiguredProviders(configured)
+      } catch (err) {
+        console.warn('[settings] provider listConfigured failed', err)
+      }
+
       loadedRef.current = true
     })()
 
     enumerateAudioDevices().then(setAudioDevices).catch(console.error)
+  }, [])
+
+  const refreshConfiguredProviders = useCallback(async () => {
+    try {
+      const configured = await providerApi.listConfigured()
+      setConfiguredProviders(configured)
+    } catch (err) {
+      console.warn('[settings] provider listConfigured failed', err)
+    }
   }, [])
 
   useEffect(() => {
@@ -685,6 +736,39 @@ export function SettingsPage() {
                 </button>
               )
             })}
+          </div>
+        </Card>
+
+        {/* Provider Keys */}
+        <Card className="p-4 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Provider Keys</h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Realtime model API keys. Stored encrypted in macOS Keychain — never leave this Mac.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            {PROVIDER_ORDER.map((p) => (
+              <ProviderKeyRow
+                key={p}
+                provider={p}
+                configured={configuredProviders.includes(p)}
+                onSaved={refreshConfiguredProviders}
+              />
+            ))}
+          </div>
+
+          <div className="flex items-start justify-between gap-3 rounded-md border border-dashed border-input bg-muted/30 px-3 py-2 opacity-70">
+            <div>
+              <p className="text-sm text-foreground">Managed key</p>
+              <p className="text-xs text-muted-foreground">
+                Use a VoiceClaw-hosted key instead of bringing your own. Coming soon.
+              </p>
+            </div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Soon
+            </span>
           </div>
         </Card>
 
@@ -1214,6 +1298,114 @@ function BrainDoctorPanel({
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+type ProviderKeyStatus =
+  | { kind: 'idle' }
+  | { kind: 'saving' }
+  | { kind: 'saved' }
+  | { kind: 'error'; message: string }
+
+function ProviderKeyRow({
+  provider,
+  configured,
+  onSaved,
+}: {
+  provider: ProviderId
+  configured: boolean
+  onSaved: () => void | Promise<void>
+}) {
+  const [key, setKey] = useState('')
+  const [show, setShow] = useState(false)
+  const [status, setStatus] = useState<ProviderKeyStatus>({ kind: 'idle' })
+  const meta = PROVIDER_KEY_META[provider]
+  const label = PROVIDER_LABELS[provider]
+
+  const handleSave = useCallback(async () => {
+    if (key.length < 8) {
+      setStatus({ kind: 'error', message: 'Key looks too short.' })
+      return
+    }
+    setStatus({ kind: 'saving' })
+    try {
+      const result = await providerApi.validateAndSave(provider, key)
+      if (result.ok) {
+        setStatus({ kind: 'saved' })
+        setKey('')
+        setShow(false)
+        captureRenderer('provider_key_saved', { provider, surface: 'settings' })
+        await onSaved()
+      } else {
+        setStatus({ kind: 'error', message: result.error })
+      }
+    } catch (err) {
+      setStatus({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Validation failed.',
+      })
+    }
+  }, [provider, key, onSaved])
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <label className="text-xs font-medium text-foreground">{label}</label>
+          {configured && (
+            <span className="text-[10px] uppercase tracking-wider text-[var(--brand-sage)]">
+              ✓ Configured
+            </span>
+          )}
+        </div>
+        <a
+          href={meta.url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          Get a key at {meta.linkLabel}
+        </a>
+      </div>
+      <div className="flex gap-2">
+        <div className="flex-1 relative">
+          <Input
+            type={show ? 'text' : 'password'}
+            value={key}
+            onChange={(e) => {
+              setKey(e.target.value)
+              if (status.kind !== 'idle') setStatus({ kind: 'idle' })
+            }}
+            placeholder={configured ? '••••••••  (replace to update)' : meta.placeholder}
+            className="pr-10"
+          />
+          <button
+            type="button"
+            onClick={() => setShow((v) => !v)}
+            aria-label={show ? 'Hide key' : 'Show key'}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          >
+            {show ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void handleSave()}
+          disabled={status.kind === 'saving' || key.length === 0}
+        >
+          {status.kind === 'saving' ? 'Checking…' : 'Validate + save'}
+        </Button>
+      </div>
+      {status.kind === 'saved' && (
+        <p className="text-[11px] text-[var(--brand-sage)]">Key saved.</p>
+      )}
+      {status.kind === 'error' && (
+        <p className="text-[11px] text-destructive" role="alert">
+          {status.message}
+        </p>
+      )}
     </div>
   )
 }
