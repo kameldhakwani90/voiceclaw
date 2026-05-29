@@ -6,6 +6,7 @@ import { allocatePort, getAllocatedPorts, markAllocatedPort } from '../ports'
 import { getBundledRelayApiKey, getTavilyApiKey } from '../onboarding'
 import { getProviderKey, type ProviderId } from '../provider-keys'
 import { resolveBundledNode } from './node-runtime'
+import { getDeviceTokenBridge } from './device-token-bridge'
 import { getOpenClawConfigPath, readGatewayAuthToken } from './openclaw-gateway'
 import { serviceManager } from './service-manager'
 
@@ -125,6 +126,14 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
   // ensures RELAY_API_KEY is provisioned in buildRelayEnv (above), so the
   // tailnet socket is only reachable with the bundled key.
   if (!env.RELAY_BIND_HOST) env.RELAY_BIND_HOST = "0.0.0.0"
+  // Per-device token validation runs through the localhost bridge owned by
+  // the desktop main process. Missing env vars => the relay falls back to
+  // the master-key path only (which is what standalone `yarn dev` wants).
+  const bridge = getDeviceTokenBridge()
+  if (bridge) {
+    if (!env.VOICECLAW_DEVICE_TOKEN_CHECK_URL) env.VOICECLAW_DEVICE_TOKEN_CHECK_URL = bridge.url
+    if (!env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE) env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = bridge.nonce
+  }
   return env
 }
 
@@ -146,6 +155,8 @@ const FORWARDED_KEYS = [
   'GIT_SHA',
   'RELAY_VERSION',
   'VOICECLAW_WORKSPACE',
+  'VOICECLAW_DEVICE_TOKEN_CHECK_URL',
+  'VOICECLAW_DEVICE_TOKEN_CHECK_NONCE',
 ] as const
 
 const PROVIDER_ENV_KEYS: Record<ProviderId, string> = {

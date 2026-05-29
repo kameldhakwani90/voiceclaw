@@ -1,8 +1,9 @@
 // Relay session — manages the lifecycle of a single client connection
 
-import { randomUUID } from "node:crypto"
+import { randomUUID, timingSafeEqual } from "node:crypto"
 import { context, ROOT_CONTEXT } from "@opentelemetry/api"
 import type { WebSocket } from "ws"
+import { checkDeviceToken, touchDeviceToken } from "./device-tokens.js"
 import type {
   ClientEvent,
   SessionConfigEvent,
@@ -809,7 +810,7 @@ export class RelaySession {
 
     switch (event.type) {
       case "session.auth":
-        this.handleSessionAuth(event.apiKey)
+        await this.handleSessionAuth(event.apiKey)
         break
       case "session.config":
         await this.handleSessionConfig(event)
@@ -874,8 +875,9 @@ export class RelaySession {
     }
   }
 
-  private handleSessionAuth(apiKey: unknown) {
-    if (!checkRelayApiKey(apiKey)) {
+  private async handleSessionAuth(apiKey: unknown) {
+    const credential = await checkRelayCredential(apiKey)
+    if (!credential.ok) {
       log(`[session:${this.id}] session.auth failed`)
       this.sendError("unauthorized", 401)
       try { this.ws.close(1008, "unauthorized") } catch { /* ignore */ }
@@ -883,7 +885,10 @@ export class RelaySession {
     }
     this.authed = true
     this.send({ type: "session.auth.ok" })
-    log(`[session:${this.id}] session.auth ok`)
+    log(`[session:${this.id}] session.auth ok (path=${credential.via})`)
+    if (credential.via === "device-token" && credential.deviceId) {
+      void touchDeviceToken(credential.deviceId)
+    }
   }
 
   // "Direct to provider" — assemble the systemInstruction string and the Gemini
@@ -1062,14 +1067,19 @@ export class RelaySession {
       this.tracer.endSession()
     }
 
-    // Validate API key
-    if (!checkRelayApiKey(config.apiKey)) {
+    // Validate API key — accepts the master RELAY_API_KEY (desktop self-connect
+    // and `yarn dev`) OR a valid per-device token (paired mobile clients).
+    const credential = await checkRelayCredential(config.apiKey)
+    if (!credential.ok) {
       log(`[session:${this.id}] Auth failed — invalid API key`)
       this.sendError("unauthorized", 401)
       this.ws.close()
       return
     }
     this.authed = true
+    if (credential.via === "device-token" && credential.deviceId) {
+      void touchDeviceToken(credential.deviceId)
+    }
 
     log(`[session:${this.id}] Auth passed, creating ${config.provider} adapter (model=${config.model || "default"})`)
     this.config = config
@@ -1292,18 +1302,45 @@ async function retryTranscriptSync(opts: {
   throw new Error("transcript sync loop exited without result")
 }
 
-// Compare a caller-supplied key against process.env.RELAY_API_KEY. Returns
-// true if the key matches; also returns true (with a permissive bypass) when
-// RELAY_ALLOW_UNAUTHENTICATED=true is set explicitly (local dev). A missing
-// RELAY_API_KEY in production is rejected upstream in index.ts (hard exit),
-// so by the time we reach this helper the env value is either real or the
-// bypass is intentional.
-function checkRelayApiKey(provided: unknown): boolean {
-  const expected = process.env.RELAY_API_KEY?.trim()
-  if (!expected) {
-    return isUnauthenticatedAllowed()
+// Wire-level credential check. Order is load-bearing:
+//   1. RELAY_ALLOW_UNAUTHENTICATED dev hatch — bypass everything.
+//   2. Master RELAY_API_KEY (timing-safe compare) — desktop self-connect and
+//      `yarn dev`. MUST be checked before any device-token lookup so the
+//      desktop self-connect does not depend on the bridge being up.
+//   3. Per-device token — calls the localhost bridge owned by the desktop
+//      main process. Live revocation: the bridge re-checks SQLite on every
+//      call, so flipping `revoked = 1` rejects the next reconnect.
+type CredentialResult =
+  | { ok: true; via: "dev-hatch" }
+  | { ok: true; via: "master-key" }
+  | { ok: true; via: "device-token"; deviceId: string }
+  | { ok: false }
+
+export async function checkRelayCredential(provided: unknown): Promise<CredentialResult> {
+  if (isUnauthenticatedAllowed()) {
+    return { ok: true, via: "dev-hatch" }
   }
-  return typeof provided === "string" && provided.length > 0 && provided === expected
+  if (typeof provided !== "string" || provided.length === 0) {
+    return { ok: false }
+  }
+  const expected = process.env.RELAY_API_KEY?.trim()
+  if (expected && constantTimeMatch(provided, expected)) {
+    return { ok: true, via: "master-key" }
+  }
+  const token = await checkDeviceToken(provided)
+  if (token.ok) {
+    return { ok: true, via: "device-token", deviceId: token.deviceId }
+  }
+  return { ok: false }
+}
+
+function constantTimeMatch(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, "utf8")
+  const bBuf = Buffer.from(b, "utf8")
+  // timingSafeEqual requires equal-length buffers. Bail when they differ so
+  // length-based early exits never reach the comparison itself.
+  if (aBuf.length !== bBuf.length) return false
+  return timingSafeEqual(aBuf, bBuf)
 }
 
 function isUnauthenticatedAllowed(): boolean {

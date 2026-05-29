@@ -351,6 +351,33 @@ describe("session direct-mode messages", () => {
       expect(closed).toBe(true)
     })
 
+    it("session.auth with the right master key authenticates with NO device-token bridge env (self-connect regression)", async () => {
+      // Exact desktop self-connect scenario: bundled RELAY_API_KEY, no
+      // device-token bridge URL/nonce in env. Must succeed without ever
+      // contacting the bridge, otherwise the desktop's own relay-client
+      // and `yarn dev` lock themselves out.
+      delete process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL
+      delete process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE
+      let fetchCalled = false
+      const original = globalThis.fetch
+      globalThis.fetch = (async () => {
+        fetchCalled = true
+        return new Response("fail", { status: 500 })
+      }) as typeof fetch
+      try {
+        const { session, sent, fakeWs } = mountSession()
+        let closed = false
+        fakeWs.close = () => { closed = true }
+        await deliver(session, { type: "session.auth", apiKey: "the-real-key" })
+        const ok = sent.find((e) => e.type === "session.auth.ok")
+        expect(ok).toBeDefined()
+        expect(closed).toBe(false)
+        expect(fetchCalled).toBe(false)
+      } finally {
+        globalThis.fetch = original
+      }
+    })
+
     it("session.auth with the right key flips the gate and subsequent tool.exec works", async () => {
       process.env.GEMINI_API_KEY = "stub-relay-key"
       const { session, sent } = mountSession()
