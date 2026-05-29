@@ -148,6 +148,20 @@ export function getBundledRelayApiKey(): string | null {
   return row?.value ?? null
 }
 
+export function getTavilyApiKey(): string | null {
+  ensureOnboardingSchema()
+  const db = getDb()
+  const enabledRow = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('tavily_enabled') as { value: string } | undefined
+  if (enabledRow?.value === 'false') return null
+  const keyRow = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('tavily_api_key') as { value: string } | undefined
+  const key = keyRow?.value
+  return key && key.length > 0 ? key : null
+}
+
 export function resetOnboarding(): OnboardingState {
   ensureOnboardingSchema()
   const db = getDb()

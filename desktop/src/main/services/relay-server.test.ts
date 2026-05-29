@@ -5,7 +5,9 @@ const existsRef = { fn: (_p: string) => false as boolean }
 const tokenRef = { value: null as string | null }
 const providerKeysRef = { fn: (_p: 'gemini' | 'openai' | 'xai') => null as string | null }
 const bundledRelayKeyRef = { value: null as string | null }
+const tavilyKeyRef = { value: null as string | null }
 const allocatedPortsRef = { openclawGateway: undefined as number | undefined }
+const bundledNodeRef = { value: null as string | null }
 let originalResourcesPath: string | undefined
 
 vi.mock('electron', () => ({
@@ -19,6 +21,7 @@ vi.mock('electron', () => ({
 vi.mock('../ports', () => ({
   allocatePort: vi.fn(),
   getAllocatedPorts: () => ({ ...allocatedPortsRef }),
+  markAllocatedPort: vi.fn(),
 }))
 
 vi.mock('fs', () => ({
@@ -31,6 +34,11 @@ vi.mock('../provider-keys', () => ({
 
 vi.mock('../onboarding', () => ({
   getBundledRelayApiKey: () => bundledRelayKeyRef.value,
+  getTavilyApiKey: () => tavilyKeyRef.value,
+}))
+
+vi.mock('./node-runtime', () => ({
+  resolveBundledNode: () => bundledNodeRef.value,
 }))
 
 vi.mock('./openclaw-gateway', () => ({
@@ -116,6 +124,7 @@ describe('buildRelayEnv', () => {
     tokenRef.value = null
     providerKeysRef.fn = () => null
     bundledRelayKeyRef.value = null
+    tavilyKeyRef.value = null
     allocatedPortsRef.openclawGateway = undefined
   })
 
@@ -193,5 +202,173 @@ describe('buildRelayEnv', () => {
     const { buildRelayEnv } = await import('./relay-server')
     const env = buildRelayEnv()
     expect(env.BRAIN_GATEWAY_URL).toBeUndefined()
+  })
+
+  it('injects TAVILY_API_KEY from the SQLite settings store when env is empty', async () => {
+    tavilyKeyRef.value = 'sqlite-tavily-key'
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.TAVILY_API_KEY).toBe('sqlite-tavily-key')
+  })
+
+  it('does not override an explicit TAVILY_API_KEY env value', async () => {
+    process.env.TAVILY_API_KEY = 'env-tavily-key'
+    tavilyKeyRef.value = 'sqlite-tavily-key'
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.TAVILY_API_KEY).toBe('env-tavily-key')
+  })
+
+  it('leaves TAVILY_API_KEY unset when neither env nor store has a value', async () => {
+    tavilyKeyRef.value = null
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.TAVILY_API_KEY).toBeUndefined()
+  })
+})
+
+describe('resolveRelaySpawn', () => {
+  beforeEach(() => {
+    originalResourcesPath = process.resourcesPath
+    isPackagedRef.value = false
+    existsRef.fn = () => false
+    bundledNodeRef.value = null
+  })
+
+  afterEach(() => {
+    if (originalResourcesPath !== undefined) {
+      Object.defineProperty(process, 'resourcesPath', {
+        value: originalResourcesPath,
+        configurable: true,
+      })
+    }
+    vi.resetModules()
+  })
+
+  it('packaged: returns bundled-node + bundled-script when both exist', async () => {
+    isPackagedRef.value = true
+    Object.defineProperty(process, 'resourcesPath', {
+      value: '/Applications/VoiceClaw.app/Contents/Resources',
+      configurable: true,
+    })
+    bundledNodeRef.value = '/Applications/VoiceClaw.app/Contents/Resources/bin/node'
+    existsRef.fn = (p: string) =>
+      p === '/Applications/VoiceClaw.app/Contents/Resources/relay-server-bundle/dist/index.js'
+
+    const { resolveRelaySpawn } = await import('./relay-server')
+    const spec = resolveRelaySpawn()
+    expect(spec).not.toBeNull()
+    expect(spec!.command).toBe('/Applications/VoiceClaw.app/Contents/Resources/bin/node')
+    expect(spec!.args).toEqual([
+      '/Applications/VoiceClaw.app/Contents/Resources/relay-server-bundle/dist/index.js',
+    ])
+  })
+
+  it('packaged: returns null when bundled script is missing', async () => {
+    isPackagedRef.value = true
+    Object.defineProperty(process, 'resourcesPath', {
+      value: '/Applications/VoiceClaw.app/Contents/Resources',
+      configurable: true,
+    })
+    existsRef.fn = () => false
+
+    const { resolveRelaySpawn } = await import('./relay-server')
+    expect(resolveRelaySpawn()).toBeNull()
+  })
+
+  it('dev: spawns relay-server source via tsx when bundled script is absent', async () => {
+    isPackagedRef.value = false
+    bundledNodeRef.value = null
+    existsRef.fn = (p: string) =>
+      p.endsWith('/relay-server/src/index.ts') ||
+      p.endsWith('/tsx/dist/cli.mjs')
+
+    const { resolveRelaySpawn } = await import('./relay-server')
+    const spec = resolveRelaySpawn()
+    expect(spec).not.toBeNull()
+    expect(spec!.command).toBe(process.execPath)
+    expect(spec!.args[0].endsWith('/tsx/dist/cli.mjs')).toBe(true)
+    expect(spec!.args[1].endsWith('/relay-server/src/index.ts')).toBe(true)
+  })
+
+  it('dev: prefers staged bundle over source when the bundle is present', async () => {
+    isPackagedRef.value = false
+    bundledNodeRef.value = '/dev/bin/node'
+    existsRef.fn = (p: string) =>
+      p.endsWith('/resources/relay-server-bundle/dist/index.js')
+
+    const { resolveRelaySpawn } = await import('./relay-server')
+    const spec = resolveRelaySpawn()
+    expect(spec).not.toBeNull()
+    expect(spec!.command).toBe('/dev/bin/node')
+    expect(spec!.args[0].endsWith('/resources/relay-server-bundle/dist/index.js')).toBe(true)
+  })
+
+  it('dev: returns null when neither bundle, source, nor tsx is available', async () => {
+    isPackagedRef.value = false
+    bundledNodeRef.value = null
+    existsRef.fn = () => false
+
+    const { resolveRelaySpawn } = await import('./relay-server')
+    expect(resolveRelaySpawn()).toBeNull()
+  })
+
+  it('dev: returns null when source exists but tsx cannot be located', async () => {
+    isPackagedRef.value = false
+    bundledNodeRef.value = null
+    existsRef.fn = (p: string) => p.endsWith('/relay-server/src/index.ts')
+
+    const { resolveRelaySpawn } = await import('./relay-server')
+    expect(resolveRelaySpawn()).toBeNull()
+  })
+})
+
+describe('startBundledRelayServer (external relay detection)', () => {
+  beforeEach(() => {
+    isPackagedRef.value = false
+    existsRef.fn = () => false
+    bundledNodeRef.value = null
+  })
+
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  it('skips spawning and records the preferred port when /health responds on :8080', async () => {
+    isPackagedRef.value = false
+    existsRef.fn = (p: string) =>
+      p.endsWith('/relay-server/src/index.ts') ||
+      p.endsWith('/tsx/dist/cli.mjs')
+
+    const { createServer } = await import('node:http')
+    const server = createServer((req, res) => {
+      if (req.url === '/health') {
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ status: 'ok' }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(8080, '127.0.0.1', () => resolve())
+    })
+
+    try {
+      const ports = await import('../ports')
+      const sm = await import('./service-manager')
+      const startSpy = vi.spyOn(sm.serviceManager, 'start').mockResolvedValue()
+      const { startBundledRelayServer } = await import('./relay-server')
+      await startBundledRelayServer()
+      expect(startSpy).not.toHaveBeenCalled()
+      expect((ports.markAllocatedPort as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+        'relay',
+        8080,
+      )
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
 })

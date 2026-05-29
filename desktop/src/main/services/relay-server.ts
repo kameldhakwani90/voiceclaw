@@ -1,36 +1,70 @@
 import { app } from 'electron'
 import { existsSync } from 'fs'
+import { request as httpRequest } from 'node:http'
 import { join } from 'path'
-import { allocatePort, getAllocatedPorts } from '../ports'
-import { getBundledRelayApiKey } from '../onboarding'
+import { allocatePort, getAllocatedPorts, markAllocatedPort } from '../ports'
+import { getBundledRelayApiKey, getTavilyApiKey } from '../onboarding'
 import { getProviderKey, type ProviderId } from '../provider-keys'
 import { resolveBundledNode } from './node-runtime'
 import { getOpenClawConfigPath, readGatewayAuthToken } from './openclaw-gateway'
 import { serviceManager } from './service-manager'
 
+const PREFERRED_RELAY_PORT = 8080
+
+export type RelaySpawnSpec = { command: string; args: string[] }
+
 export async function startBundledRelayServer(): Promise<void> {
-  const scriptPath = resolveBundledRelayScript()
-  if (!scriptPath) {
-    console.info('[relay] bundled script not found; skipping spawn')
+  const spec = resolveRelaySpawn()
+  if (!spec) {
+    console.info('[relay] no executable script available; skipping spawn')
     return
   }
-  const nodePath = resolveBundledNode()
-  if (!nodePath) {
-    console.info('[relay] bundled node runtime not found; skipping spawn')
+
+  if (await isExternalRelayRunning(PREFERRED_RELAY_PORT)) {
+    console.info(
+      `[relay] external relay already serving :${PREFERRED_RELAY_PORT}; skipping spawn`,
+    )
+    markAllocatedPort('relay', PREFERRED_RELAY_PORT)
     return
   }
 
   const port = await allocatePort('relay')
 
+  const env = buildRelayEnv()
+  if (spec.command === process.execPath) {
+    // Strip Electron's GUI bootstrap so the binary acts as plain Node
+    // while tsx loads the relay-server TypeScript source.
+    env.ELECTRON_RUN_AS_NODE = '1'
+  }
+
   await serviceManager.start({
     name: 'relay',
-    command: nodePath,
-    args: [scriptPath],
-    env: buildRelayEnv(),
+    command: spec.command,
+    args: spec.args,
+    env,
     port,
     healthCheckUrl: `http://127.0.0.1:${port}/health`,
     logFile: 'relay-server.log',
   })
+}
+
+export function resolveRelaySpawn(): RelaySpawnSpec | null {
+  if (app.isPackaged) {
+    const script = resolveBundledRelayScript()
+    if (!script) return null
+    const node = resolveBundledNode()
+    if (!node) return null
+    return { command: node, args: [script] }
+  }
+  // In dev, prefer a staged bundled build if present (e.g. after
+  // `node scripts/build-services.mjs`), otherwise spawn the workspace
+  // source via tsx so the desktop owns the relay end-to-end.
+  const bundled = resolveBundledRelayScript()
+  if (bundled) {
+    const node = resolveBundledNode()
+    if (node) return { command: node, args: [bundled] }
+  }
+  return resolveDevSourceRelay()
 }
 
 export function resolveBundledRelayScript(): string | null {
@@ -41,6 +75,24 @@ export function resolveBundledRelayScript(): string | null {
   }
   const dev = join(__dirname, '..', '..', 'resources', relative)
   return existsSync(dev) ? dev : null
+}
+
+export function resolveDevSourceRelay(): RelaySpawnSpec | null {
+  const repoRoot = getRepoRootInDev()
+  const script = join(repoRoot, 'relay-server', 'src', 'index.ts')
+  if (!existsSync(script)) return null
+  // Point at tsx's CLI entry directly so the spawn does not rely on the
+  // shebang line — service-manager intentionally hands children a
+  // minimal env without PATH.
+  const tsxCandidates = [
+    join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    join(repoRoot, 'desktop', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+  ]
+  const tsxCli = tsxCandidates.find((p) => existsSync(p))
+  if (!tsxCli) return null
+  // Re-use Electron's bundled Node by running its binary in Node mode.
+  // The ELECTRON_RUN_AS_NODE env flag is set in buildRelayEnv().
+  return { command: process.execPath, args: [tsxCli, script] }
 }
 
 export function buildRelayEnv(): NodeJS.ProcessEnv {
@@ -63,9 +115,10 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
     const openclawPort = getAllocatedPorts().openclawGateway
     if (openclawPort) env.BRAIN_GATEWAY_URL = `http://127.0.0.1:${openclawPort}`
   }
-  // Tavily is stored in the renderer-side settings KV today, not the
-  // provider-keys vault, so the relay reads it from process.env via the
-  // forwarded passthrough above when the user has exported it.
+  if (!env.TAVILY_API_KEY) {
+    const stored = getTavilyApiKey()
+    if (stored) env.TAVILY_API_KEY = stored
+  }
   return env
 }
 
@@ -100,4 +153,35 @@ function forwardedEnv(): NodeJS.ProcessEnv {
     if (value !== undefined) env[key] = value
   }
   return env
+}
+
+// Electron-vite emits main to <repo>/desktop/out/main, so __dirname is
+// three levels under the repo root in dev. Packaged builds never call
+// this — they take the bundled-script path instead.
+function getRepoRootInDev(): string {
+  return join(__dirname, '..', '..', '..')
+}
+
+function isExternalRelayRunning(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = httpRequest(
+      {
+        method: 'GET',
+        host: '127.0.0.1',
+        port,
+        path: '/health',
+        timeout: 500,
+      },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode === 200)
+      },
+    )
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => {
+      req.destroy()
+      resolve(false)
+    })
+    req.end()
+  })
 }
