@@ -1,8 +1,8 @@
 // Tool definitions for STS sessions
-// echo_tool for testing, ask_brain for brain agent integration,
-// web_search for fast Tavily-backed lookups (only when a Tavily key is set),
-// plus the experimental direct tools (read/write/edit/bash) gated by
-// experimentalDirectTools.
+// echo_tool for testing, web_search for fast Tavily-backed lookups (only when
+// a Tavily key is set), plus the direct tools (read/write/edit/bash) that are
+// always advertised — the `experimentalDirectTools` config flag is no longer a
+// gate, it's accepted for wire-compat only.
 
 import type { SessionConfigEvent } from "../types.js"
 import {

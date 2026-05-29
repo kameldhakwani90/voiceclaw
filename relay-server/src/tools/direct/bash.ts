@@ -125,10 +125,15 @@ export async function runBash(
   return new Promise<BashResult | BashError>((resolve) => {
     let child: ChildProcess
     try {
+      // detached:true puts the shell into its OWN process group so we can
+      // signal the whole group on abort/timeout. Without this, child.kill()
+      // only terminates /bin/sh and leaves any descendants (claude -p, codex,
+      // long curl, etc.) running detached.
       child = spawn("/bin/sh", ["-c", args.command], {
         cwd,
         env: opts.env ?? process.env,
         stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
       })
     } catch (err) {
       resolve({ error: `spawn failed: ${(err as Error).message}` })
@@ -148,13 +153,23 @@ export async function runBash(
       resolve(result)
     }
 
+    // Signal the whole process group (-pid). Falls back to the single child
+    // pid if the group send fails (e.g. on systems where setpgid didn't take).
+    const killGroup = (signal: NodeJS.Signals) => {
+      const pid = child.pid
+      if (typeof pid !== "number") return
+      try { process.kill(-pid, signal) }
+      catch {
+        try { process.kill(pid, signal) } catch { /* ignore */ }
+      }
+    }
+
     const onAbort = () => {
       if (settled) return
-      // SIGTERM first; the timeout below will SIGKILL if the child ignores it.
-      try { child.kill("SIGTERM") } catch { /* ignore */ }
-      setTimeout(() => {
-        try { child.kill("SIGKILL") } catch { /* ignore */ }
-      }, 500).unref()
+      // SIGTERM first to the group; SIGKILL on the group 500ms later in case
+      // the children ignore TERM.
+      killGroup("SIGTERM")
+      setTimeout(() => killGroup("SIGKILL"), 500).unref()
     }
     if (opts.signal) {
       if (opts.signal.aborted) {
@@ -166,10 +181,8 @@ export async function runBash(
 
     const timeoutHandle = setTimeout(() => {
       timedOut = true
-      try { child.kill("SIGTERM") } catch { /* ignore */ }
-      setTimeout(() => {
-        try { child.kill("SIGKILL") } catch { /* ignore */ }
-      }, 500).unref()
+      killGroup("SIGTERM")
+      setTimeout(() => killGroup("SIGKILL"), 500).unref()
     }, timeoutMs)
 
     child.stdout?.on("data", (chunk: Buffer) => {

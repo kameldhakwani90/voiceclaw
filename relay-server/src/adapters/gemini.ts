@@ -135,6 +135,11 @@ export class GeminiAdapter implements ProviderAdapter {
     this.config = config
     this.disconnected = false
     this.watchdogEnabled = config.watchdog === "enabled"
+    // Reset mic-gate state on every connect. If a prior connection dropped
+    // mid-turn while assistantSpeaking was true, the flag would otherwise stay
+    // set across the new session and permanently gate the mic to zero frames.
+    this.assistantSpeaking = false
+    this.droppedMicFramesWhileSpeaking = 0
 
     await this.rebuildResumePreamble(config.conversationHistory ?? [])
 
@@ -552,6 +557,10 @@ export class GeminiAdapter implements ProviderAdapter {
     this.clearWatchdog()
     this.clearPostResumeWatchdog()
     this.injectionEchoBuffer = ""
+    // Drop the mic-gate so a subsequent connect on the same adapter instance
+    // (or a stale reference in tests) never inherits a stuck "speaking" flag.
+    this.assistantSpeaking = false
+    this.droppedMicFramesWhileSpeaking = 0
     if (this.videoIdleTimer) {
       clearTimeout(this.videoIdleTimer)
       this.videoIdleTimer = null
