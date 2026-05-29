@@ -5,10 +5,9 @@
 // which is what the mobile "direct to provider" path needs so we never ship
 // the long-lived GEMINI_API_KEY off the desktop.
 //
-// If the upstream call fails (404 / 403 / network), we fall back to handing
-// back the raw GEMINI_API_KEY with ephemeral=false so the user's tailnet test
-// path still works. The session log warns loudly and the wire response carries
-// the flag so the client can decide how to treat it.
+// Failure is fail-closed: if the upstream call fails (4xx, 5xx, parse, missing
+// name), we return an error so the mobile client falls back to relay-proxy
+// mode instead of receiving the raw long-lived key.
 
 export const GEMINI_AUTH_TOKEN_URL =
   "https://generativelanguage.googleapis.com/v1alpha/auth_tokens"
@@ -33,7 +32,7 @@ export interface MintGeminiTokenSuccess {
   ok: true
   token: string
   expiresAt: number
-  ephemeral: boolean
+  ephemeral: true
   warning?: string
 }
 
@@ -76,7 +75,7 @@ export async function mintGeminiToken(
       body: JSON.stringify(body),
     })
   } catch (err) {
-    return fallbackToRawKey(apiKey, expireAtMs, `network error: ${(err as Error).message}`)
+    return { ok: false, error: `gemini auth_tokens unavailable: network error: ${(err as Error).message}` }
   }
 
   if (!response.ok) {
@@ -86,31 +85,19 @@ export async function mintGeminiToken(
     } catch {
       // best-effort — body may not be readable
     }
-    return fallbackToRawKey(
-      apiKey,
-      expireAtMs,
-      `upstream returned ${response.status}: ${upstream.slice(0, 200)}`,
-    )
+    return { ok: false, error: `gemini auth_tokens unavailable: upstream returned ${response.status}: ${upstream.slice(0, 200)}` }
   }
 
   let parsed: { name?: unknown, expireTime?: unknown } | null = null
   try {
     parsed = (await response.json()) as { name?: unknown, expireTime?: unknown }
   } catch (err) {
-    return fallbackToRawKey(
-      apiKey,
-      expireAtMs,
-      `upstream returned non-JSON: ${(err as Error).message}`,
-    )
+    return { ok: false, error: `gemini auth_tokens unavailable: upstream returned non-JSON: ${(err as Error).message}` }
   }
 
   const tokenName = typeof parsed.name === "string" ? parsed.name : ""
   if (!tokenName) {
-    return fallbackToRawKey(
-      apiKey,
-      expireAtMs,
-      "upstream response missing token name",
-    )
+    return { ok: false, error: "gemini auth_tokens unavailable: upstream response missing token name" }
   }
 
   const expiresAt = typeof parsed.expireTime === "string"
@@ -121,19 +108,5 @@ export async function mintGeminiToken(
     token: tokenName,
     expiresAt: Number.isFinite(expiresAt) ? expiresAt : expireAtMs,
     ephemeral: true,
-  }
-}
-
-function fallbackToRawKey(
-  apiKey: string,
-  expireAtMs: number,
-  reason: string,
-): MintGeminiTokenSuccess {
-  return {
-    ok: true,
-    token: apiKey,
-    expiresAt: expireAtMs,
-    ephemeral: false,
-    warning: `gemini auth_tokens unavailable; returning raw key (${reason})`,
   }
 }

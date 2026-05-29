@@ -56,44 +56,42 @@ describe("mintGeminiToken", () => {
     expect(body.liveConnectConstraints).toEqual({ model: "gemini-3.1-flash-live-preview" })
   })
 
-  it("falls back to the raw API key with ephemeral=false when the upstream returns non-2xx", async () => {
+  it("fails closed (no raw-key fallback) when the upstream returns non-2xx", async () => {
     const fetchImpl = vi.fn(async () =>
       new Response("forbidden", { status: 403 }),
     ) as unknown as typeof fetch
 
     const result = await mintGeminiToken({ apiKey: "raw-key", fetchImpl })
 
-    expect(result.ok).toBe(true)
-    if (!result.ok) throw new Error("expected ok result")
-    expect(result.token).toBe("raw-key")
-    expect(result.ephemeral).toBe(false)
-    expect(result.warning).toBeDefined()
-    expect(result.warning).toMatch(/403/)
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error("expected failure")
+    expect(result.error).toMatch(/403/)
+    // Critically: the raw key must never appear in the failure payload.
+    expect(result.error).not.toContain("raw-key")
   })
 
-  it("falls back to the raw API key when fetch throws", async () => {
+  it("fails closed when fetch throws", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("ECONNREFUSED")
     }) as unknown as typeof fetch
 
     const result = await mintGeminiToken({ apiKey: "raw-key", fetchImpl })
 
-    expect(result.ok).toBe(true)
-    if (!result.ok) throw new Error("expected ok result")
-    expect(result.token).toBe("raw-key")
-    expect(result.ephemeral).toBe(false)
-    expect(result.warning).toMatch(/ECONNREFUSED/)
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error("expected failure")
+    expect(result.error).toMatch(/ECONNREFUSED/)
+    expect(result.error).not.toContain("raw-key")
   })
 
-  it("falls back when the upstream response is missing a name", async () => {
+  it("fails closed when the upstream response is missing a name", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({})) as unknown as typeof fetch
 
     const result = await mintGeminiToken({ apiKey: "raw-key", fetchImpl })
 
-    expect(result.ok).toBe(true)
-    if (!result.ok) throw new Error("expected ok result")
-    expect(result.token).toBe("raw-key")
-    expect(result.ephemeral).toBe(false)
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error("expected failure")
+    expect(result.error).toMatch(/missing token name/)
+    expect(result.error).not.toContain("raw-key")
   })
 
   it("rejects when the API key is empty", async () => {
