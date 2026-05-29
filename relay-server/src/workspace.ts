@@ -58,12 +58,8 @@ FACTS.md later if it turns out to be durable.
 Reusable playbooks live under \`skills/\`. Each file is a step-by-step the
 user expects you to follow when its topic comes up. Read the relevant
 playbook in full before you start the work — they are not loaded into your
-context by default. Today's playbooks:
-
-- \`skills/job-application.md\` — reviewing a job posting, drafting a
-  tailored cover letter + tailoring notes, staging artifacts under
-  \`jobs/<slug>/\`, and submitting via the browser. Use this any time
-  the user asks you to look at, prepare, or send a job application.
+context by default. None ship by default; you and the user add playbooks
+here over time.
 
 ## Bash and long-running work
 

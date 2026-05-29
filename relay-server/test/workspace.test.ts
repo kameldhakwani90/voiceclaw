@@ -80,8 +80,9 @@ describe("workspace", () => {
       expect(await readFile(join(getSkillsDir(), "job-application.md"), "utf-8")).toBe("custom-skill")
     })
 
-    it("includes the skills pointer in DEFAULT_AGENTS_MD", () => {
-      expect(DEFAULT_AGENTS_MD).toContain("skills/job-application.md")
+    it("documents the skills/ mechanism in DEFAULT_AGENTS_MD", () => {
+      expect(DEFAULT_AGENTS_MD).toContain("## Skills")
+      expect(DEFAULT_AGENTS_MD).toContain("skills/")
     })
 
     it("does not overwrite existing seed files", async () => {
