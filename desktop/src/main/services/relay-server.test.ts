@@ -225,6 +225,20 @@ describe('buildRelayEnv', () => {
     const env = buildRelayEnv()
     expect(env.TAVILY_API_KEY).toBeUndefined()
   })
+
+  it('sets RELAY_BIND_HOST=0.0.0.0 by default so the desktop-managed relay stays reachable on the tailnet', async () => {
+    delete process.env.RELAY_BIND_HOST
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.RELAY_BIND_HOST).toBe('0.0.0.0')
+  })
+
+  it('does not override an explicit RELAY_BIND_HOST env value', async () => {
+    process.env.RELAY_BIND_HOST = '127.0.0.1'
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.RELAY_BIND_HOST).toBe('127.0.0.1')
+  })
 })
 
 describe('resolveRelaySpawn', () => {

@@ -35,6 +35,12 @@ export class RelaySession {
   // fallback) and stashes it here, since the standalone tool.exec path carries
   // no session.config to resolve it from.
   private directTavilyKey: string | null = null
+  // True once a valid RELAY_API_KEY has been presented (via session.auth or
+  // session.config). All privileged handlers — mint_token, tool.exec,
+  // session.prep, audio/frame/response/tool.result — require this. When
+  // RELAY_ALLOW_UNAUTHENTICATED=true is set (local dev), the flag flips true
+  // on first message so legacy fixtures still work.
+  private authed = false
   private startedAt: number = Date.now()
   private turnCount: number = 0
   private tracer = new TurnTracer()
@@ -785,7 +791,26 @@ export class RelaySession {
       return
     }
 
+    // Auth gate. session.auth and session.config carry credentials and run
+    // their own checks; everything else requires this.authed === true. A peer
+    // that talks to the WS without authenticating is closed with 1008 before
+    // any privileged work happens (mint_token, tool.exec, session.prep, tool
+    // dispatch, audio/frame forwarding).
+    if (!this.authed && event.type !== "session.auth" && event.type !== "session.config") {
+      if (isUnauthenticatedAllowed()) {
+        this.authed = true
+      } else {
+        log(`[session:${this.id}] Rejected ${event.type} from unauthenticated peer`)
+        this.sendError("unauthorized", 401)
+        try { this.ws.close(1008, "unauthorized") } catch { /* ignore */ }
+        return
+      }
+    }
+
     switch (event.type) {
+      case "session.auth":
+        this.handleSessionAuth(event.apiKey)
+        break
       case "session.config":
         await this.handleSessionConfig(event)
         break
@@ -847,6 +872,18 @@ export class RelaySession {
       default:
         this.sendError(`unknown event type: ${(event as { type: string }).type}`, 400)
     }
+  }
+
+  private handleSessionAuth(apiKey: unknown) {
+    if (!checkRelayApiKey(apiKey)) {
+      log(`[session:${this.id}] session.auth failed`)
+      this.sendError("unauthorized", 401)
+      try { this.ws.close(1008, "unauthorized") } catch { /* ignore */ }
+      return
+    }
+    this.authed = true
+    this.send({ type: "session.auth.ok" })
+    log(`[session:${this.id}] session.auth ok`)
   }
 
   // "Direct to provider" — assemble the systemInstruction string and the Gemini
@@ -1026,16 +1063,19 @@ export class RelaySession {
     }
 
     // Validate API key
-    const expectedKey = process.env.RELAY_API_KEY
-    if (!config.apiKey || (expectedKey && config.apiKey !== expectedKey)) {
+    if (!checkRelayApiKey(config.apiKey)) {
       log(`[session:${this.id}] Auth failed — invalid API key`)
       this.sendError("unauthorized", 401)
       this.ws.close()
       return
     }
+    this.authed = true
 
     log(`[session:${this.id}] Auth passed, creating ${config.provider} adapter (model=${config.model || "default"})`)
     this.config = config
+    // Reset direct mode state on every session.config so a second config
+    // doesn't carry a stale tavily key from a prior session.prep.
+    this.directTavilyKey = null
     this.startedAt = Date.now()
 
     // When direct tools are enabled, ensure the workspace + default AGENTS.md
@@ -1250,6 +1290,24 @@ async function retryTranscriptSync(opts: {
     }
   }
   throw new Error("transcript sync loop exited without result")
+}
+
+// Compare a caller-supplied key against process.env.RELAY_API_KEY. Returns
+// true if the key matches; also returns true (with a permissive bypass) when
+// RELAY_ALLOW_UNAUTHENTICATED=true is set explicitly (local dev). A missing
+// RELAY_API_KEY in production is rejected upstream in index.ts (hard exit),
+// so by the time we reach this helper the env value is either real or the
+// bypass is intentional.
+function checkRelayApiKey(provided: unknown): boolean {
+  const expected = process.env.RELAY_API_KEY?.trim()
+  if (!expected) {
+    return isUnauthenticatedAllowed()
+  }
+  return typeof provided === "string" && provided.length > 0 && provided === expected
+}
+
+function isUnauthenticatedAllowed(): boolean {
+  return process.env.RELAY_ALLOW_UNAUTHENTICATED === "true"
 }
 
 function extractBrainError(result: string): string | null {

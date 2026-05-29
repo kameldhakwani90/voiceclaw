@@ -64,6 +64,10 @@ export function useDirectGemini(callbacks: DirectGeminiCallbacks): RealtimeContr
     resolve: (r: { token: string }) => void
     reject: (e: Error) => void
   } | null>(null)
+  const pendingAuthResolversRef = useRef<{
+    resolve: () => void
+    reject: (e: Error) => void
+  } | null>(null)
   const pendingToolCallsRef = useRef<Map<string, { name: string, startedAt: number }>>(new Map())
 
   const [isConnected, setIsConnected] = useState(false)
@@ -121,6 +125,7 @@ export function useDirectGemini(callbacks: DirectGeminiCallbacks): RealtimeContr
     relayWsRef.current = null
     pendingPrepResolversRef.current = null
     pendingTokenResolversRef.current = null
+    pendingAuthResolversRef.current = null
     pendingToolCallsRef.current.clear()
     assistantSpeakingRef.current = false
     droppedMicFramesRef.current = 0
@@ -286,6 +291,23 @@ export function useDirectGemini(callbacks: DirectGeminiCallbacks): RealtimeContr
     catch { return }
 
     switch (data.type) {
+      case 'session.auth.ok': {
+        const r = pendingAuthResolversRef.current
+        pendingAuthResolversRef.current = null
+        r?.resolve()
+        return
+      }
+      case 'error': {
+        // The relay rejects with a generic ErrorEvent on auth failure (and
+        // closes the socket immediately after). Fail any pending handshake so
+        // the caller can drop to the relay-proxy fallback path.
+        if (data.code === 401 && pendingAuthResolversRef.current) {
+          const r = pendingAuthResolversRef.current
+          pendingAuthResolversRef.current = null
+          r?.reject(new Error(String(data.message ?? 'unauthorized')))
+        }
+        return
+      }
       case 'session.prep.result': {
         const r = pendingPrepResolversRef.current
         pendingPrepResolversRef.current = null
@@ -397,6 +419,31 @@ export function useDirectGemini(callbacks: DirectGeminiCallbacks): RealtimeContr
     ws.send(JSON.stringify(payload))
   }, [])
 
+  const requestAuth = useCallback((apiKey: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      pendingAuthResolversRef.current = { resolve, reject }
+      const timer = setTimeout(() => {
+        if (pendingAuthResolversRef.current) {
+          pendingAuthResolversRef.current = null
+          reject(new Error('session.auth timeout'))
+        }
+      }, PREP_TIMEOUT_MS)
+      try {
+        sendOnRelay({ type: 'session.auth', apiKey })
+      } catch (e) {
+        clearTimeout(timer)
+        pendingAuthResolversRef.current = null
+        reject(e instanceof Error ? e : new Error(String(e)))
+        return
+      }
+      const wrap = pendingAuthResolversRef.current
+      pendingAuthResolversRef.current = {
+        resolve: () => { clearTimeout(timer); wrap?.resolve() },
+        reject: (e) => { clearTimeout(timer); wrap?.reject(e) },
+      }
+    })
+  }, [sendOnRelay])
+
   const requestPrep = useCallback((config: RealtimeConfig): Promise<{ instructions: string, tools: GeminiFunctionDeclaration[] }> => {
     return new Promise((resolve, reject) => {
       pendingPrepResolversRef.current = { resolve, reject }
@@ -481,6 +528,9 @@ export function useDirectGemini(callbacks: DirectGeminiCallbacks): RealtimeContr
       }, SETUP_TIMEOUT_MS)
 
       ws.onopen = () => {
+        // Fresh socket = fresh mic-gate state.
+        assistantSpeakingRef.current = false
+        droppedMicFramesRef.current = 0
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const setup: Record<string, any> = {
           model: `models/${model}`,
@@ -542,6 +592,11 @@ export function useDirectGemini(callbacks: DirectGeminiCallbacks): RealtimeContr
           return
         }
         if (geminiWsRef.current === ws) geminiWsRef.current = null
+        // Drop the mic-gate before any re-start — otherwise a mid-turn drop
+        // leaves assistantSpeaking=true and the next session permanently
+        // gates all mic frames.
+        assistantSpeakingRef.current = false
+        droppedMicFramesRef.current = 0
         if (!userStoppedRef.current) {
           callbacksRef.current.onDisconnect?.()
         }
@@ -564,6 +619,9 @@ export function useDirectGemini(callbacks: DirectGeminiCallbacks): RealtimeContr
       try {
         await openRelayWs(config.serverUrl)
         captureMobile('direct_relay_connected', { model })
+        // Authenticate first; the relay rejects mint_token/session.prep with
+        // 401 + WS close otherwise (post-blocker security fix).
+        await requestAuth(config.apiKey)
         const [prep, token] = await Promise.all([
           requestPrep(config),
           requestToken(model),
@@ -578,7 +636,7 @@ export function useDirectGemini(callbacks: DirectGeminiCallbacks): RealtimeContr
         callbacksRef.current.onDirectModeFailure?.(reason)
       }
     })()
-  }, [cleanup, openRelayWs, requestPrep, requestToken, openGeminiWs])
+  }, [cleanup, openRelayWs, requestAuth, requestPrep, requestToken, openGeminiWs])
 
   const stop = useCallback(() => {
     userStoppedRef.current = true

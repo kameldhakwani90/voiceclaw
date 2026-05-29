@@ -3,6 +3,7 @@
 // Client → Relay events
 export type ClientEvent =
   | SessionConfigEvent
+  | SessionAuthEvent
   | AudioAppendEvent
   | AudioAppendCaptureOnlyEvent
   | AudioCommitEvent
@@ -15,6 +16,15 @@ export type ClientEvent =
   | MintTokenEvent
   | ToolExecEvent
   | SessionPrepEvent
+
+// One-shot auth handshake used by the direct-to-provider path. Sending a
+// session.config with a valid apiKey is the alternate path (it also flips the
+// authed flag). The relay closes the socket on any privileged message that
+// arrives before either has succeeded.
+export interface SessionAuthEvent {
+  type: "session.auth"
+  apiKey: string
+}
 
 export interface SessionConfigEvent {
   type: "session.config"
@@ -40,9 +50,9 @@ export interface SessionConfigEvent {
   watchdog?: "enabled" | "disabled"
   instructionsOverride?: string
   conversationHistory?: { role: "user" | "assistant", text: string, timestamp?: number, relativeMs?: number }[]
-  // When true, the realtime model is given direct tools (read/write/edit/bash)
-  // and ask_brain is removed from the exposed tool list. Default off — opt-in
-  // via session config so production keeps today's behavior unchanged.
+  // Historical flag — direct tools (read/write/edit/bash) are now always
+  // advertised; this field is accepted for wire-compat but no longer gates
+  // anything. Kept so older clients can still send it without error.
   experimentalDirectTools?: boolean
 }
 
@@ -134,6 +144,11 @@ export type RelayEvent =
   | StandaloneToolErrorEvent
   | SessionPrepResultEvent
   | SessionPrepErrorEvent
+  | SessionAuthOkEvent
+
+export interface SessionAuthOkEvent {
+  type: "session.auth.ok"
+}
 
 export interface SessionReadyEvent {
   type: "session.ready"
@@ -319,10 +334,11 @@ export interface TokenEvent {
   // Wall-clock ms epoch at which the token stops being usable to start new
   // sessions. Clients should refresh before this.
   expiresAt: number
-  // true when the token is a freshly-minted short-lived auth_tokens.create
-  // result; false when the upstream API was unavailable and the relay fell
-  // back to handing the raw GEMINI_API_KEY through (dev/tailnet only).
-  ephemeral: boolean
+  // Always true on the wire — the relay no longer falls back to the raw
+  // GEMINI_API_KEY when the auth_tokens endpoint fails; it returns a
+  // token.error instead. Kept on the interface so old clients can still
+  // type-check the field they branch on.
+  ephemeral: true
   model?: string
 }
 

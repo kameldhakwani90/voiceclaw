@@ -10,12 +10,16 @@ import { networkInterfaces } from "node:os"
 import { WebSocketServer } from "ws"
 import { RelaySession } from "./session.js"
 import { getTestPageHTML } from "./test-page.js"
-import { log, warn } from "./log.js"
+import { log, warn, error as logError } from "./log.js"
 import { gracefulShutdown } from "./shutdown.js"
 
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
 const PORT = parseInt(process.env.PORT ?? "8080", 10)
+// Default to loopback so a misconfigured relay (no RELAY_API_KEY, no firewall)
+// is not reachable from the LAN/tailnet. The desktop sets RELAY_BIND_HOST
+// explicitly to 0.0.0.0 when the user opted into mobile pairing.
+const HOST = process.env.RELAY_BIND_HOST?.trim() || "127.0.0.1"
 
 const app = express()
 
@@ -83,16 +87,23 @@ process.on("SIGTERM", () => { void shutdown() })
 process.on("SIGINT", () => { void shutdown() })
 
 if (!process.env.RELAY_API_KEY) {
-  warn("⚠️  RELAY_API_KEY is not set — WebSocket connections will not require authentication")
+  // Production must have a relay key or the WS is wide open: any LAN/tailnet
+  // peer can run mint_token / tool.exec / session.prep. The dev override is
+  // explicit so we never ship "we just forgot to set it".
+  if (process.env.NODE_ENV === "production" && process.env.RELAY_ALLOW_UNAUTHENTICATED !== "true") {
+    logError("RELAY_API_KEY is not set in production — refusing to start (set RELAY_ALLOW_UNAUTHENTICATED=true to bypass for local dev only)")
+    process.exit(1)
+  }
+  warn("⚠️  RELAY_API_KEY is not set — WebSocket connections will not require authentication (dev only)")
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   const lanIP = getLanIP()
-  log(`Relay server listening on http://localhost:${PORT}`)
+  log(`Relay server listening on http://${HOST}:${PORT}`)
   if (isTestPageEnabled()) {
     log(`Test page: http://localhost:${PORT}/test`)
   }
-  if (lanIP) {
+  if (HOST === "0.0.0.0" && lanIP) {
     log(`Connect from your phone:`)
     log(`  ws://${lanIP}:${PORT}/ws`)
     if (isTestPageEnabled()) {

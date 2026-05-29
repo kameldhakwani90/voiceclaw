@@ -15,6 +15,7 @@ describe("session direct-mode messages", () => {
   let tmpRoot: string
   let prevWorkspace: string | undefined
   let prevGeminiKey: string | undefined
+  let prevAllowUnauth: string | undefined
 
   beforeEach(async () => {
     tmpRoot = await mkdtemp(join(tmpdir(), "voiceclaw-direct-mode-"))
@@ -22,6 +23,10 @@ describe("session direct-mode messages", () => {
     process.env.VOICECLAW_WORKSPACE = join(tmpRoot, "workspace")
     await ensureWorkspace()
     prevGeminiKey = process.env.GEMINI_API_KEY
+    // The existing tests assume no RELAY_API_KEY set, so set the explicit
+    // dev-bypass; per-test cases override this to test the locked-down path.
+    prevAllowUnauth = process.env.RELAY_ALLOW_UNAUTHENTICATED
+    process.env.RELAY_ALLOW_UNAUTHENTICATED = "true"
   })
 
   afterEach(async () => {
@@ -29,6 +34,8 @@ describe("session direct-mode messages", () => {
     else process.env.VOICECLAW_WORKSPACE = prevWorkspace
     if (prevGeminiKey === undefined) delete process.env.GEMINI_API_KEY
     else process.env.GEMINI_API_KEY = prevGeminiKey
+    if (prevAllowUnauth === undefined) delete process.env.RELAY_ALLOW_UNAUTHENTICATED
+    else process.env.RELAY_ALLOW_UNAUTHENTICATED = prevAllowUnauth
     await rm(tmpRoot, { recursive: true, force: true })
   })
 
@@ -267,7 +274,104 @@ describe("session direct-mode messages", () => {
     }
   })
 
-  it("mint_token falls back to ephemeral=false when the upstream call fails", async () => {
+  describe("auth gating", () => {
+    let prevRelayKey: string | undefined
+    let prevAllow: string | undefined
+
+    beforeEach(() => {
+      prevRelayKey = process.env.RELAY_API_KEY
+      prevAllow = process.env.RELAY_ALLOW_UNAUTHENTICATED
+      process.env.RELAY_API_KEY = "the-real-key"
+      delete process.env.RELAY_ALLOW_UNAUTHENTICATED
+    })
+
+    afterEach(() => {
+      if (prevRelayKey === undefined) delete process.env.RELAY_API_KEY
+      else process.env.RELAY_API_KEY = prevRelayKey
+      if (prevAllow === undefined) delete process.env.RELAY_ALLOW_UNAUTHENTICATED
+      else process.env.RELAY_ALLOW_UNAUTHENTICATED = prevAllow
+    })
+
+    it("rejects tool.exec from an unauthenticated peer (1008 close)", async () => {
+      const { session, sent, fakeWs } = mountSession()
+      let closed = false
+      fakeWs.close = () => { closed = true }
+      await deliver(session, {
+        type: "tool.exec",
+        callId: "call-evil",
+        name: "bash",
+        arguments: JSON.stringify({ command: "echo pwned" }),
+      })
+      const err = sent.find((e) => e.type === "error") as Extract<RelayEvent, { type: "error" }> | undefined
+      expect(err).toBeDefined()
+      expect(err?.code).toBe(401)
+      expect(closed).toBe(true)
+    })
+
+    it("rejects mint_token from an unauthenticated peer", async () => {
+      process.env.GEMINI_API_KEY = "stub-relay-key"
+      const { session, sent, fakeWs } = mountSession()
+      let closed = false
+      fakeWs.close = () => { closed = true }
+      await deliver(session, { type: "mint_token", provider: "gemini" })
+      const err = sent.find((e) => e.type === "error") as Extract<RelayEvent, { type: "error" }> | undefined
+      expect(err?.code).toBe(401)
+      expect(closed).toBe(true)
+      // The token must NEVER have been minted.
+      expect(sent.some((e) => e.type === "token")).toBe(false)
+    })
+
+    it("rejects session.prep from an unauthenticated peer", async () => {
+      const { session, sent, fakeWs } = mountSession()
+      let closed = false
+      fakeWs.close = () => { closed = true }
+      await deliver(session, {
+        type: "session.prep",
+        config: {
+          type: "session.config",
+          provider: "gemini",
+          voice: "Zephyr",
+          model: "gemini-3.1-flash-live-preview",
+          brainAgent: "enabled",
+          apiKey: "stub-key",
+        },
+      })
+      const err = sent.find((e) => e.type === "error") as Extract<RelayEvent, { type: "error" }> | undefined
+      expect(err?.code).toBe(401)
+      expect(closed).toBe(true)
+    })
+
+    it("session.auth with wrong key returns 401 and closes", async () => {
+      const { session, sent, fakeWs } = mountSession()
+      let closed = false
+      fakeWs.close = () => { closed = true }
+      await deliver(session, { type: "session.auth", apiKey: "wrong" })
+      const err = sent.find((e) => e.type === "error") as Extract<RelayEvent, { type: "error" }> | undefined
+      expect(err?.code).toBe(401)
+      expect(closed).toBe(true)
+    })
+
+    it("session.auth with the right key flips the gate and subsequent tool.exec works", async () => {
+      process.env.GEMINI_API_KEY = "stub-relay-key"
+      const { session, sent } = mountSession()
+      await deliver(session, { type: "session.auth", apiKey: "the-real-key" })
+      const ok = sent.find((e) => e.type === "session.auth.ok")
+      expect(ok).toBeDefined()
+      // Now mint_token should succeed (with a mocked auth_tokens upstream).
+      const fetchImpl = async () =>
+        new Response(JSON.stringify({ name: "ephem-1", expireTime: "2099-01-01T00:00:00Z" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      using _ = withFetch(fetchImpl as unknown as typeof fetch)
+      await deliver(session, { type: "mint_token", provider: "gemini" })
+      await waitForEvent(sent, (e) => e.type === "token" || e.type === "token.error")
+      const token = sent.find((e) => e.type === "token") as Extract<RelayEvent, { type: "token" }> | undefined
+      expect(token?.token).toBe("ephem-1")
+    })
+  })
+
+  it("mint_token returns token.error (no raw-key fallback) when the upstream call fails", async () => {
     process.env.GEMINI_API_KEY = "stub-relay-key"
     const fetchImpl = async () => new Response("forbidden", { status: 403 })
     using _ = withFetch(fetchImpl as unknown as typeof fetch)
@@ -276,9 +380,12 @@ describe("session direct-mode messages", () => {
     await deliver(session, { type: "mint_token", provider: "gemini" })
     await waitForEvent(sent, (e) => e.type === "token" || e.type === "token.error")
     const token = sent.find((e) => e.type === "token") as Extract<RelayEvent, { type: "token" }> | undefined
-    expect(token).toBeDefined()
-    expect(token?.token).toBe("stub-relay-key")
-    expect(token?.ephemeral).toBe(false)
+    const err = sent.find((e) => e.type === "token.error") as Extract<RelayEvent, { type: "token.error" }> | undefined
+    expect(token).toBeUndefined()
+    expect(err).toBeDefined()
+    expect(err?.message).toMatch(/403/)
+    // The raw key must never leak in the failure payload.
+    expect(err?.message).not.toContain("stub-relay-key")
   })
 })
 

@@ -119,6 +119,12 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
     const stored = getTavilyApiKey()
     if (stored) env.TAVILY_API_KEY = stored
   }
+  // Desktop-managed relay still needs to be reachable on the tailnet so the
+  // paired mobile app can connect. The relay now defaults to 127.0.0.1 to
+  // close the open-WS-on-LAN gap; we re-open it here because the desktop also
+  // ensures RELAY_API_KEY is provisioned in buildRelayEnv (above), so the
+  // tailnet socket is only reachable with the bundled key.
+  if (!env.RELAY_BIND_HOST) env.RELAY_BIND_HOST = "0.0.0.0"
   return env
 }
 
@@ -131,6 +137,8 @@ const FORWARDED_KEYS = [
   'BRAIN_GATEWAY_URL',
   'BRAIN_GATEWAY_AUTH_TOKEN',
   'RELAY_API_KEY',
+  'RELAY_BIND_HOST',
+  'RELAY_ALLOW_UNAUTHENTICATED',
   'LANGFUSE_PUBLIC_KEY',
   'LANGFUSE_SECRET_KEY',
   'LANGFUSE_BASE_URL',
