@@ -14,6 +14,7 @@ export type ClientEvent =
   | TextInputEvent
   | MintTokenEvent
   | ToolExecEvent
+  | SessionPrepEvent
 
 export interface SessionConfigEvent {
   type: "session.config"
@@ -131,6 +132,8 @@ export type RelayEvent =
   | TokenErrorEvent
   | StandaloneToolResultEvent
   | StandaloneToolErrorEvent
+  | SessionPrepResultEvent
+  | SessionPrepErrorEvent
 
 export interface SessionReadyEvent {
   type: "session.ready"
@@ -354,4 +357,33 @@ export interface StandaloneToolErrorEvent {
   name: string
   error: string
   durationMs?: number
+}
+
+// "Direct to provider" — when the mobile client opens its own WS straight to
+// Gemini Live, it still needs the system instructions (identity / SOUL / facts
+// / memory preamble + tools guidance) and the function declarations the relay
+// would have wired in. Only the relay can assemble these (workspace, env). The
+// client sends session.prep with the same fields it would have sent as
+// session.config; the relay replies with the built instructions string and the
+// Gemini-shaped tool declarations to splice into the upstream setup message.
+export interface SessionPrepEvent {
+  type: "session.prep"
+  config: SessionConfigEvent
+}
+
+interface GeminiFunctionDeclaration {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+}
+
+export interface SessionPrepResultEvent {
+  type: "session.prep.result"
+  instructions: string
+  tools: GeminiFunctionDeclaration[]
+}
+
+export interface SessionPrepErrorEvent {
+  type: "session.prep.error"
+  message: string
 }

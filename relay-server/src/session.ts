@@ -10,7 +10,7 @@ import type {
 } from "./types.js"
 import type { ProviderAdapter, SendToClient } from "./adapters/types.js"
 import { createAdapter } from "./adapters/index.js"
-import { executeSyncTool, findRelayTool, getRelayTools, isBlockingLatencyClass, resolveTavilyKey } from "./tools/index.js"
+import { executeSyncTool, findRelayTool, getGeminiTools, getRelayTools, isBlockingLatencyClass, resolveTavilyKey } from "./tools/index.js"
 import { askBrain } from "./tools/brain.js"
 import { webSearch } from "./tools/web-search.js"
 import { runRead, READ_TOOL_NAME } from "./tools/direct/read.js"
@@ -837,8 +837,34 @@ export class RelaySession {
       case "tool.exec":
         this.handleStandaloneToolExec(event.callId, event.name, event.arguments)
         break
+      case "session.prep":
+        await this.handleSessionPrep(event.config)
+        break
       default:
         this.sendError(`unknown event type: ${(event as { type: string }).type}`, 400)
+    }
+  }
+
+  // "Direct to provider" — assemble the systemInstruction string and the Gemini
+  // function declarations the client needs to splice into its own setup message.
+  // Workspace-aware bits (identity, FACTS, recent memory, tool registration)
+  // live on the relay; the client just relays the result into Gemini's setup.
+  // Standalone: no adapter, no upstream connection.
+  private async handleSessionPrep(config: SessionConfigEvent) {
+    try {
+      await ensureWorkspace()
+    } catch (err) {
+      logError(`[session:${this.id}] session.prep ensureWorkspace failed:`, err instanceof Error ? err.message : err)
+    }
+    try {
+      const instructions = buildInstructions(config)
+      const tools = getGeminiTools(config)
+      log(`[session:${this.id}] session.prep: ${instructions.length} chars, ${tools.length} tools`)
+      this.send({ type: "session.prep.result", instructions, tools })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "session.prep failed"
+      logError(`[session:${this.id}] session.prep error: ${message}`)
+      this.send({ type: "session.prep.error", message })
     }
   }
 

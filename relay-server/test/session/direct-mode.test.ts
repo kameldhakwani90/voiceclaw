@@ -137,6 +137,37 @@ describe("session direct-mode messages", () => {
     expect(err.message).toMatch(/GEMINI_API_KEY/)
   })
 
+  it("session.prep returns instructions + gemini tool declarations without a session.config", async () => {
+    const { session, sent } = mountSession()
+    await deliver(session, {
+      type: "session.prep",
+      config: {
+        type: "session.config",
+        provider: "gemini",
+        voice: "Zephyr",
+        model: "gemini-3.1-flash-live-preview",
+        brainAgent: "enabled",
+        apiKey: "stub-key",
+      },
+    })
+    await waitForEvent(sent, (e) => e.type === "session.prep.result" || e.type === "session.prep.error")
+    const result = sent.find((e) => e.type === "session.prep.result") as
+      | Extract<RelayEvent, { type: "session.prep.result" }>
+      | undefined
+    expect(result).toBeDefined()
+    expect(typeof result?.instructions).toBe("string")
+    expect((result?.instructions ?? "").length).toBeGreaterThan(0)
+    expect(Array.isArray(result?.tools)).toBe(true)
+    // read/write/edit/bash are unconditionally registered by getRelayTools.
+    const names = (result?.tools ?? []).map((t) => t.name)
+    expect(names).toEqual(expect.arrayContaining(["read", "write", "edit", "bash"]))
+    for (const t of result?.tools ?? []) {
+      expect(typeof t.name).toBe("string")
+      expect(typeof t.description).toBe("string")
+      expect(typeof t.parameters).toBe("object")
+    }
+  })
+
   it("mint_token falls back to ephemeral=false when the upstream call fails", async () => {
     process.env.GEMINI_API_KEY = "stub-relay-key"
     const fetchImpl = async () => new Response("forbidden", { status: 403 })
