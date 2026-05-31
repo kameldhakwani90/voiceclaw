@@ -432,7 +432,7 @@ function PairQrModal({
         <h4 className="text-sm font-semibold text-foreground">Pair a device</h4>
         <p className="text-xs text-muted-foreground">
           Scan with your iPhone's Camera app — tap the prompt to open VoiceClaw and
-          finish pairing. The token is shown once; copy it for a manual fallback.
+          finish pairing.
         </p>
       </div>
 
@@ -465,38 +465,46 @@ function PairQrModal({
         </p>
       )}
 
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <label className="text-xs text-muted-foreground">Token (shown once — copy now)</label>
-          <button
-            type="button"
-            onClick={() => onCopy(created.plaintext, 'token')}
-            className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          >
-            {copied === 'token' ? 'Copied!' : 'Copy'}
-          </button>
-        </div>
-        <code className="block break-all rounded-md border border-input bg-muted px-3 py-2 text-[11px] font-mono text-foreground select-all">
-          {created.plaintext}
-        </code>
-      </div>
+      <details className="group">
+        <summary className="cursor-pointer list-none text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground select-none">
+          <span className="group-open:hidden">Show manual fallback</span>
+          <span className="hidden group-open:inline">Hide manual fallback</span>
+        </summary>
+        <div className="mt-3 space-y-3">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-muted-foreground">Token (shown once — copy now)</label>
+              <button
+                type="button"
+                onClick={() => onCopy(created.plaintext, 'token')}
+                className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                {copied === 'token' ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+            <code className="block break-all rounded-md border border-input bg-muted px-3 py-2 text-[11px] font-mono text-foreground select-all">
+              {created.plaintext}
+            </code>
+          </div>
 
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <label className="text-xs text-muted-foreground">Pairing link</label>
-          <button
-            type="button"
-            onClick={() => onCopy(deeplink, 'url')}
-            className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
-            disabled={!deeplink}
-          >
-            {copied === 'url' ? 'Copied!' : 'Copy'}
-          </button>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-muted-foreground">Pairing link</label>
+              <button
+                type="button"
+                onClick={() => onCopy(deeplink, 'url')}
+                className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                disabled={!deeplink}
+              >
+                {copied === 'url' ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+            <code className="block break-all rounded-md border border-input bg-muted px-3 py-2 text-[11px] font-mono text-foreground select-all">
+              {deeplink || '(no network detected)'}
+            </code>
+          </div>
         </div>
-        <code className="block break-all rounded-md border border-input bg-muted px-3 py-2 text-[11px] font-mono text-foreground select-all">
-          {deeplink || '(no network detected)'}
-        </code>
-      </div>
+      </details>
 
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="ghost" size="sm" onClick={onCancel}>

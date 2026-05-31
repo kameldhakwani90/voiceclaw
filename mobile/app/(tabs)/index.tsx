@@ -476,6 +476,7 @@ export default function ChatScreen() {
 
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
     const locale = Intl.DateTimeFormat().resolvedOptions().locale
+    const deviceName = (await getSetting('device_name')) || undefined
 
     const allMessages = await getMessages(conversationId)
     // Cap at 200 messages so a runaway conversation can't inflate the
@@ -510,6 +511,7 @@ export default function ChatScreen() {
       instructionsOverride: systemPrompt || undefined,
       conversationHistory: recentMessages.length > 0 ? recentMessages : undefined,
       tracingEnabled,
+      deviceName,
     }
     lastConfigRef.current = startConfig
     console.log('[Realtime] Starting session with', { serverUrl, voice, model, historyMessages: recentMessages.length, echoGateEnabled, echoGateThreshold, mode: useDirect ? 'direct' : 'relay' })

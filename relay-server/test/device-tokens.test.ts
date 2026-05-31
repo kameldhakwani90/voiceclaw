@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { checkDeviceToken, touchDeviceToken } from "../src/device-tokens.js"
+import { checkDeviceToken, identifyDeviceToken, touchDeviceToken } from "../src/device-tokens.js"
 
 describe("checkDeviceToken", () => {
   let prevUrl: string | undefined
@@ -97,6 +97,36 @@ describe("checkDeviceToken", () => {
       throw new Error("fetch must not be called")
     })
     await touchDeviceToken("dev-1") // does not throw
+  })
+
+  it("identifyDeviceToken posts the plaintext token + name with the nonce", async () => {
+    const seen: { url: string; body: string; headers: Record<string, string> }[] = []
+    using _ = withFetch(async (input, init) => {
+      seen.push({
+        url: String(input),
+        body: typeof init?.body === "string" ? init.body : "",
+        headers: init?.headers as Record<string, string>,
+      })
+      return new Response(JSON.stringify({ ok: true, renamed: true }), { status: 200 })
+    })
+    await identifyDeviceToken("vcd_xyz", "Michael's iPhone")
+    expect(seen).toHaveLength(1)
+    expect(seen[0].url).toContain("/device-token/identify")
+    expect(JSON.parse(seen[0].body)).toEqual({ token: "vcd_xyz", name: "Michael's iPhone" })
+    expect(seen[0].headers["x-voiceclaw-nonce"]).toBe("nonce-xyz")
+  })
+
+  it("identifyDeviceToken is a no-op for blank name or missing env", async () => {
+    let called = 0
+    using _ = withFetch(async () => {
+      called++
+      return new Response("{}", { status: 200 })
+    })
+    await identifyDeviceToken("vcd_xyz", "   ")
+    expect(called).toBe(0)
+    delete process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL
+    await identifyDeviceToken("vcd_xyz", "Phone")
+    expect(called).toBe(0)
   })
 
   it("touchDeviceToken posts the device id with the nonce", async () => {

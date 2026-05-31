@@ -3,7 +3,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto"
 import { context, ROOT_CONTEXT } from "@opentelemetry/api"
 import type { WebSocket } from "ws"
-import { checkDeviceToken, touchDeviceToken } from "./device-tokens.js"
+import { checkDeviceToken, identifyDeviceToken, touchDeviceToken } from "./device-tokens.js"
 import type {
   ClientEvent,
   SessionConfigEvent,
@@ -813,7 +813,7 @@ export class RelaySession {
 
     switch (event.type) {
       case "session.auth":
-        await this.handleSessionAuth(event.apiKey)
+        await this.handleSessionAuth(event.apiKey, event.deviceName)
         break
       case "session.config":
         await this.handleSessionConfig(event)
@@ -878,7 +878,7 @@ export class RelaySession {
     }
   }
 
-  private async handleSessionAuth(apiKey: unknown) {
+  private async handleSessionAuth(apiKey: unknown, deviceName?: string) {
     const credential = await checkRelayCredential(apiKey)
     if (!credential.ok) {
       log(`[session:${this.id}] session.auth failed`)
@@ -891,6 +891,9 @@ export class RelaySession {
     log(`[session:${this.id}] session.auth ok (path=${credential.via})`)
     if (credential.via === "device-token" && credential.deviceId) {
       void touchDeviceToken(credential.deviceId)
+      if (typeof apiKey === "string" && typeof deviceName === "string" && deviceName.trim().length > 0) {
+        void identifyDeviceToken(apiKey, deviceName)
+      }
     }
   }
 
@@ -1082,6 +1085,9 @@ export class RelaySession {
     this.authed = true
     if (credential.via === "device-token" && credential.deviceId) {
       void touchDeviceToken(credential.deviceId)
+      if (typeof config.apiKey === "string" && typeof config.deviceName === "string" && config.deviceName.trim().length > 0) {
+        void identifyDeviceToken(config.apiKey, config.deviceName)
+      }
     }
 
     const requestedMode = resolveVoiceMode(config.voiceMode)

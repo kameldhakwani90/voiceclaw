@@ -24,6 +24,7 @@ export interface RealtimeConfig {
   instructionsOverride?: string
   conversationHistory?: { role: 'user' | 'assistant', text: string }[]
   tracingEnabled?: boolean
+  deviceName?: string
 }
 
 export interface RmsMetrics {
@@ -263,6 +264,7 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
         apiKey: config.apiKey,
         sessionKey: config.sessionKey,
         deviceContext: config.deviceContext,
+        deviceName: config.deviceName,
         instructionsOverride: config.instructionsOverride,
         conversationHistory: config.conversationHistory,
       }))

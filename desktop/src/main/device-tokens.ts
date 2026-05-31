@@ -95,6 +95,26 @@ export function lookupDeviceTokenByHash(
   return { id: row.id, revoked: row.revoked !== 0 }
 }
 
+// Default labels minted by the desktop start with this prefix (see
+// buildDefaultLabel in renderer/src/lib/pair.ts). The mobile-initiated
+// rename only fires when the row still wears that auto-label so a
+// user's manual rename is never clobbered.
+export const DEFAULT_LABEL_PREFIX = 'New device'
+
+export function renameDeviceTokenIfDefault(tokenHash: string, name: string): boolean {
+  ensureOnboardingSchema()
+  const trimmed = name.trim()
+  if (trimmed.length === 0) return false
+  const db = getDb()
+  const row = db
+    .prepare('SELECT id, label FROM device_tokens WHERE token_hash = ?')
+    .get(tokenHash) as { id: string; label: string } | undefined
+  if (!row) return false
+  if (!row.label.startsWith(DEFAULT_LABEL_PREFIX)) return false
+  db.prepare('UPDATE device_tokens SET label = ? WHERE id = ?').run(trimmed, row.id)
+  return true
+}
+
 export function touchDeviceToken(id: string): void {
   ensureOnboardingSchema()
   const db = getDb()
