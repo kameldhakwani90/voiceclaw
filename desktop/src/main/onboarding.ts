@@ -1,6 +1,6 @@
-import { randomUUID } from 'crypto'
 import { getDb } from './db'
 import { capture as telemetryCapture } from './telemetry'
+import { createDeviceToken, getSystemDeviceToken } from './device-tokens'
 
 // Onboarding state — single-row table (id=1) capturing the wizard's
 // resume point and accumulated payload. Renderer reads on mount; if
@@ -140,18 +140,37 @@ export type BundledDefaults = {
   serverUrlPlaceholder: string | null
 }
 
+// First-launch (and reset) bootstrap. Mints the un-revokable 'system'
+// device token that represents THIS Mac in the device_tokens table, and
+// surfaces its plaintext through the existing `realtime_api_key` settings
+// row so the renderer's ChatPage can keep reading it just-in-time without
+// the relay needing a separate master key.
+//
+// Migration: if an old `realtime_api_key` UUID exists from before the
+// drop-master-key cutover, it's overwritten by the new device-token
+// plaintext on this same boot — before the renderer makes its first WS
+// request — so nothing 401s mid-session. The old UUID is dropped from
+// settings rather than kept around as a parallel auth path.
 export function ensureBundledRelayDefaults(options: { force?: boolean } = {}): BundledDefaults {
   ensureOnboardingSchema()
   const db = getDb()
-  const existing = db
-    .prepare('SELECT value FROM settings WHERE key = ?')
-    .get('realtime_api_key') as { value: string } | undefined
-  let apiKey = existing?.value ?? ''
-  if (options.force || !apiKey) {
-    apiKey = randomUUID()
+  let apiKey = ''
+  const existingSystem = getSystemDeviceToken()
+  if (options.force || !existingSystem) {
+    // Mint a fresh system row. We can't recover an existing system row's
+    // plaintext (only the sha256 hash is stored), so the only safe path
+    // when the row is missing is to mint anew — the previous plaintext is
+    // unrecoverable anyway.
+    const created = createDeviceToken('This Mac', { kind: 'system' })
+    apiKey = created.plaintext
     db.prepare(
       'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?',
     ).run('realtime_api_key', apiKey, apiKey)
+  } else {
+    const existing = db
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .get('realtime_api_key') as { value: string } | undefined
+    apiKey = existing?.value ?? ''
   }
   if (options.force) {
     db.prepare('DELETE FROM settings WHERE key = ?').run('realtime_server_url')
