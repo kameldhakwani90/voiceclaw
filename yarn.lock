@@ -12451,6 +12451,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"expo-device@npm:~55.0.7":
+  version: 55.0.17
+  resolution: "expo-device@npm:55.0.17"
+  dependencies:
+    ua-parser-js: "npm:^0.7.33"
+  peerDependencies:
+    expo: "*"
+  checksum: 10/69626e6d1717bf0c49a8a5c333cad20e794d5e9d41f70ed295743099c7cf9770c0dc2b05cf8a418b2c5e835bc791552d1876784f4fb9acf83f666f9077f355e9
+  languageName: node
+  linkType: hard
+
 "expo-file-system@npm:~55.0.22":
   version: 55.0.22
   resolution: "expo-file-system@npm:55.0.22"
@@ -22768,6 +22779,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"ua-parser-js@npm:^0.7.33":
+  version: 0.7.41
+  resolution: "ua-parser-js@npm:0.7.41"
+  bin:
+    ua-parser-js: script/cli.js
+  checksum: 10/e41306332d8ace098d51a644a3ba95522ddfc04243727a3c0419efcdf486c8f868c3af8e6a56f6aa86bdc26e6b893abb0b2bde0c9e1a1625a183dfdf839cac82
+  languageName: node
+  linkType: hard
+
 "ua-parser-js@npm:^1.0.35":
   version: 1.0.41
   resolution: "ua-parser-js@npm:1.0.41"
@@ -23651,6 +23671,7 @@ __metadata:
     clsx: "npm:^2.1.1"
     expo: "npm:~55.0.26"
     expo-constants: "npm:~55.0.16"
+    expo-device: "npm:~55.0.7"
     expo-linking: "npm:~55.0.15"
     expo-mcp: "npm:~0.2.1"
     expo-router: "npm:~55.0.16"

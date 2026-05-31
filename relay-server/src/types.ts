@@ -24,6 +24,11 @@ export type ClientEvent =
 export interface SessionAuthEvent {
   type: "session.auth"
   apiKey: string
+  // Optional self-reported device name (e.g. `Device.deviceName` or
+  // `Device.modelName` from expo-device). The relay forwards this to
+  // the desktop bridge so a freshly paired row stops reading
+  // "New device · 11:23 AM".
+  deviceName?: string
 }
 
 export interface SessionConfigEvent {
@@ -71,6 +76,9 @@ export interface SessionConfigEvent {
   // currently routes through the existing openclaw/brain gateway regardless
   // of the value here. See relay-server/src/agents.ts.
   agentBackend?: AgentBackend
+  // See SessionAuthEvent.deviceName — accepted on session.config too so
+  // clients that skip the auth handshake still get auto-identified.
+  deviceName?: string
 }
 
 export type VoiceMode = "direct" | "operator" | "supervisor"

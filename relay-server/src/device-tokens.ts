@@ -59,6 +59,27 @@ export async function checkDeviceToken(plaintext: unknown): Promise<DeviceTokenC
   }
 }
 
+export async function identifyDeviceToken(plaintext: string, name: string): Promise<void> {
+  const bridge = getBridgeConfig()
+  if (!bridge) return
+  if (typeof plaintext !== "string" || plaintext.length === 0) return
+  if (typeof name !== "string" || name.trim().length === 0) return
+  try {
+    await fetchWithTimeout(`${bridge.url}/device-token/identify`, {
+      method: "POST",
+      headers: {
+        [NONCE_HEADER]: bridge.nonce,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ token: plaintext, name }),
+    })
+  } catch (err) {
+    log(
+      `[device-tokens] identify failed (ignored): ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+}
+
 export async function touchDeviceToken(deviceId: string): Promise<void> {
   const bridge = getBridgeConfig()
   if (!bridge) return

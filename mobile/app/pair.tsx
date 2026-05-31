@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { View, ActivityIndicator } from 'react-native'
 import { Stack, useLocalSearchParams, router } from 'expo-router'
+import * as Device from 'expo-device'
 import { Text } from '@/components/ui/text'
 import { Button } from '@/components/ui/button'
 import { setSetting } from '@/db/settings'
@@ -25,11 +26,67 @@ function pickFirst(value: string | string[] | undefined): string {
 export async function persistPairing(opts: {
   url: string
   token: string
+  deviceName?: string
   setter?: (key: string, value: string) => Promise<void>
 }): Promise<void> {
   const setter = opts.setter ?? setSetting
   await setter('realtime_server_url', opts.url)
   await setter('realtime_api_key', opts.token)
+  if (opts.deviceName && opts.deviceName.trim().length > 0) {
+    await setter('device_name', opts.deviceName.trim())
+  }
+}
+
+export function resolveDeviceName(): string {
+  const candidate = Device.deviceName || Device.modelName || ''
+  return candidate.trim() || 'iPhone'
+}
+
+export async function identifyPairedDevice(opts: {
+  url: string
+  token: string
+  deviceName: string
+  // Injected for tests; defaults to a real WebSocket round-trip.
+  open?: (url: string) => {
+    send: (msg: string) => void
+    close: () => void
+    onMessage: (handler: (data: string) => void) => void
+    onError: (handler: () => void) => void
+    onOpen: (handler: () => void) => void
+  }
+}): Promise<void> {
+  const opener = opts.open ?? defaultOpen
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      try { sock.close() } catch { /* ignore */ }
+      resolve()
+    }
+    const sock = opener(opts.url)
+    sock.onOpen(() => {
+      sock.send(JSON.stringify({
+        type: 'session.auth',
+        apiKey: opts.token,
+        deviceName: opts.deviceName,
+      }))
+    })
+    sock.onMessage(() => finish())
+    sock.onError(() => finish())
+    setTimeout(finish, 3000)
+  })
+}
+
+function defaultOpen(url: string) {
+  const ws = new WebSocket(url)
+  return {
+    send: (msg: string) => ws.send(msg),
+    close: () => ws.close(),
+    onMessage: (h: (data: string) => void) => { ws.onmessage = (e) => h(String(e.data)) },
+    onError: (h: () => void) => { ws.onerror = () => h() },
+    onOpen: (h: () => void) => { ws.onopen = () => h() },
+  }
 }
 
 export default function PairScreen() {
@@ -50,8 +107,17 @@ export default function PairScreen() {
       return
     }
 
-    persistPairing({ url, token })
-      .then(() => setStatus({ kind: 'ok', label, url }))
+    const deviceName = resolveDeviceName()
+    persistPairing({ url, token, deviceName })
+      .then(async () => {
+        try {
+          await identifyPairedDevice({ url, token, deviceName })
+        } catch {
+          // Identify is best-effort. The row keeps its default label
+          // and the user can rename from the desktop list.
+        }
+        setStatus({ kind: 'ok', label, url })
+      })
       .catch((err) => setStatus({
         kind: 'error',
         reason: err instanceof Error ? err.message : 'Could not save pairing.',

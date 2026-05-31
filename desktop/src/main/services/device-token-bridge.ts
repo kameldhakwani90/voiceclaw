@@ -1,7 +1,12 @@
 import { randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { URL } from 'node:url'
-import { hashDeviceToken, lookupDeviceTokenByHash, touchDeviceToken } from '../device-tokens'
+import {
+  hashDeviceToken,
+  lookupDeviceTokenByHash,
+  renameDeviceTokenIfDefault,
+  touchDeviceToken,
+} from '../device-tokens'
 
 // Localhost-only HTTP endpoint the bundled relay calls to validate
 // inbound per-device tokens. The desktop owns the SQLite DB AND the
@@ -98,6 +103,29 @@ function handleRequest(req: IncomingMessage, res: ServerResponse, nonce: string)
           return
         }
         respond(res, 200, { ok: true, deviceId: row.id })
+      })
+      .catch(() => respond(res, 200, { ok: false }))
+    return
+  }
+  if (req.method === 'POST' && parsed.pathname === '/device-token/identify') {
+    readJson(req)
+      .then((body) => {
+        const token = typeof (body as { token?: unknown }).token === 'string'
+          ? (body as { token: string }).token
+          : ''
+        const name = typeof (body as { name?: unknown }).name === 'string'
+          ? (body as { name: string }).name
+          : ''
+        if (token.length === 0 || name.trim().length === 0) {
+          respond(res, 200, { ok: false })
+          return
+        }
+        try {
+          const renamed = renameDeviceTokenIfDefault(hashDeviceToken(token), name)
+          respond(res, 200, { ok: true, renamed })
+        } catch {
+          respond(res, 200, { ok: false })
+        }
       })
       .catch(() => respond(res, 200, { ok: false }))
     return

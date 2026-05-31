@@ -80,6 +80,16 @@ const fakeDb = {
         },
       }
     }
+    if (sql === 'SELECT id, label FROM device_tokens WHERE token_hash = ?') {
+      return {
+        get: (hash: string) => {
+          for (const row of rows.values()) {
+            if (row.token_hash === hash) return { id: row.id, label: row.label }
+          }
+          return undefined
+        },
+      }
+    }
     if (sql === 'UPDATE device_tokens SET label = ? WHERE id = ?') {
       return {
         run: (label: string, id: string) => {
@@ -224,6 +234,33 @@ describe('device tokens', () => {
   it('lookupDeviceTokenByHash returns null for an unknown hash', async () => {
     const { lookupDeviceTokenByHash } = await import('./device-tokens')
     expect(lookupDeviceTokenByHash('0'.repeat(64))).toBeNull()
+  })
+
+  it('renameDeviceTokenIfDefault renames only when the label still matches the default pattern', async () => {
+    const { createDeviceToken, renameDeviceTokenIfDefault, hashDeviceToken, renameDeviceToken } =
+      await import('./device-tokens')
+    const t = createDeviceToken('New device · Mar 4, 10:22 AM')
+    const hash = hashDeviceToken(t.plaintext)
+    expect(renameDeviceTokenIfDefault(hash, "Michael's iPhone")).toBe(true)
+    expect(rows.get(t.id)!.label).toBe("Michael's iPhone")
+
+    // Second call: label no longer starts with "New device" → no-op.
+    expect(renameDeviceTokenIfDefault(hash, 'Other Phone')).toBe(false)
+    expect(rows.get(t.id)!.label).toBe("Michael's iPhone")
+
+    // Manual rename then identify: untouched.
+    renameDeviceToken(t.id, 'My Phone')
+    expect(renameDeviceTokenIfDefault(hash, 'Auto Name')).toBe(false)
+    expect(rows.get(t.id)!.label).toBe('My Phone')
+  })
+
+  it('renameDeviceTokenIfDefault is a no-op for unknown hash and blank name', async () => {
+    const { createDeviceToken, renameDeviceTokenIfDefault, hashDeviceToken } =
+      await import('./device-tokens')
+    const t = createDeviceToken('New device · x')
+    expect(renameDeviceTokenIfDefault('0'.repeat(64), 'foo')).toBe(false)
+    expect(renameDeviceTokenIfDefault(hashDeviceToken(t.plaintext), '   ')).toBe(false)
+    expect(rows.get(t.id)!.label).toBe('New device · x')
   })
 
   it('touchDeviceToken bumps last_used_at', async () => {
