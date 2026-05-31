@@ -12,6 +12,7 @@ import { useAutoSave, type SaveStatus } from '@/lib/use-auto-save'
 import { validateApiKey, type Provider, type ValidationStatus } from '@/lib/validate-api-key'
 import ExpoCustomPipelineModule from '@/modules/expo-custom-pipeline/src/ExpoCustomPipelineModule'
 import { AlertCircleIcon, CheckIcon, EyeIcon, EyeOffIcon, RefreshCwIcon, WifiIcon, WifiOffIcon } from 'lucide-react-native'
+import * as Device from 'expo-device'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Alert, Animated, KeyboardAvoidingView, Platform, Pressable, ScrollView, Switch, TextInput, View } from 'react-native'
 import Slider from '@react-native-community/slider'
@@ -109,12 +110,11 @@ export default function SettingsScreen() {
   const [realtimeApiKey, setRealtimeApiKey] = useState('')
   const [realtimeVolume, setRealtimeVolume] = useState(2.0)
   const [realtimeModel, setRealtimeModel] = useState<RealtimeModel>('gemini-3.1-flash-live-preview')
-  const [realtimeTestStatus, setRealtimeTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle')
-  const [realtimeTestError, setRealtimeTestError] = useState('')
 
   type PairTest = 'idle' | 'testing' | 'paired' | 'unauthorized' | 'unreachable'
   const [pairTestStatus, setPairTestStatus] = useState<PairTest>('idle')
   const [pairTestDetail, setPairTestDetail] = useState('')
+  const [pairTestUrl, setPairTestUrl] = useState('')
 
   // Debug mode
   const [debugMode, setDebugMode] = useState(false)
@@ -315,20 +315,10 @@ export default function SettingsScreen() {
     if (loadedRef.current) saveImmediate('openai_tts_voice', v)
   }, [saveImmediate])
 
-  const updateRealtimeServerUrl = useCallback((v: string) => {
-    setRealtimeServerUrl(v)
-    if (loadedRef.current) saveDebounced('realtime_server_url', v)
-  }, [saveDebounced])
-
   const updateRealtimeVoice = useCallback((v: string) => {
     setRealtimeVoice(v)
     if (loadedRef.current) saveImmediate('realtime_voice', v)
   }, [saveImmediate])
-
-  const updateRealtimeApiKey = useCallback((v: string) => {
-    setRealtimeApiKey(v)
-    if (loadedRef.current) saveDebounced('realtime_api_key', v)
-  }, [saveDebounced])
 
   const updateRealtimeVolume = useCallback((v: number) => {
     setRealtimeVolume(v)
@@ -353,43 +343,6 @@ export default function SettingsScreen() {
       updateRealtimeVoice('marin')
     }
   }, [saveImmediate, realtimeVoice, updateRealtimeVoice])
-
-  const testRealtimeConnection = useCallback(async () => {
-    setRealtimeTestStatus('testing')
-    setRealtimeTestError('')
-    const wsUrl = realtimeServerUrl
-    const result = await new Promise<{ ok: boolean; detail: string }>((resolve) => {
-      try {
-        const ws = new WebSocket(wsUrl)
-        const timer = setTimeout(() => {
-          try { ws.close() } catch {}
-          resolve({ ok: false, detail: 'Timeout (8s) — no response from server' })
-        }, 8000)
-        ws.onopen = () => {
-          clearTimeout(timer)
-          try { ws.close() } catch {}
-          resolve({ ok: true, detail: 'ok' })
-        }
-        ws.onerror = (e: Event & { message?: string }) => {
-          clearTimeout(timer)
-          resolve({ ok: false, detail: `WebSocket error: ${e?.message || 'connection refused or unreachable'}` })
-        }
-        ws.onclose = (e: CloseEvent) => {
-          clearTimeout(timer)
-          resolve({ ok: false, detail: `WebSocket closed before open (code=${e.code}${e.reason ? ` reason=${e.reason}` : ''})` })
-        }
-      } catch (e) {
-        resolve({ ok: false, detail: `Threw: ${e instanceof Error ? e.message : String(e)}` })
-      }
-    })
-    console.log('[relay-test] ws:', result)
-    if (result.ok) {
-      setRealtimeTestStatus('ok')
-    } else {
-      setRealtimeTestStatus('error')
-      setRealtimeTestError(`${result.detail}\nurl=${wsUrl}`)
-    }
-  }, [realtimeServerUrl])
 
   const updateConnectionMode = useCallback((v: BrainConnectionMode) => {
     setConnectionMode(v)
@@ -467,38 +420,51 @@ export default function SettingsScreen() {
   const testPairing = useCallback(async () => {
     setPairTestStatus('testing')
     setPairTestDetail('')
-    if (!realtimeApiKey) {
+    const storedUrl = (await getSetting('realtime_server_url')) || DEFAULT_REALTIME_SERVER_URL
+    const storedKey = (await getSetting('realtime_api_key')) || ''
+    setPairTestUrl(storedUrl)
+    if (!storedKey) {
       setPairTestStatus('unauthorized')
       setPairTestDetail('No token stored. Pair this device from the desktop first.')
       return
     }
-    const url = realtimeServerUrl || DEFAULT_REALTIME_SERVER_URL
+    const deviceName = (Device.deviceName || Device.modelName || 'iPhone').trim() || 'iPhone'
     const result = await new Promise<PairTest>((resolve) => {
       let settled = false
-      const done = (r: PairTest) => { if (!settled) { settled = true; try { ws.close() } catch {} resolve(r) } }
       let ws: WebSocket
+      const done = (r: PairTest) => {
+        if (settled) return
+        settled = true
+        try { ws?.close() } catch { /* ignore */ }
+        resolve(r)
+      }
       try {
-        ws = new WebSocket(url)
+        ws = new WebSocket(storedUrl)
       } catch {
         resolve('unreachable')
         return
       }
-      const timer = setTimeout(() => done('unreachable'), 5000)
+      const timer = setTimeout(() => done('unreachable'), 7000)
       ws.onopen = () => {
         try {
-          ws.send(JSON.stringify({ type: 'session.auth', apiKey: realtimeApiKey }))
+          ws.send(JSON.stringify({ type: 'session.auth', apiKey: storedKey, deviceName }))
         } catch {
           clearTimeout(timer)
           done('unreachable')
         }
       }
       ws.onmessage = (e) => {
-        clearTimeout(timer)
         try {
           const msg = JSON.parse(String(e.data))
-          if (msg?.type === 'error' && msg?.code === 401) return done('unauthorized')
-        } catch { /* ignore */ }
-        done('paired')
+          if (msg?.type === 'session.auth.ok') {
+            clearTimeout(timer)
+            return done('paired')
+          }
+          if (msg?.type === 'error' && msg?.code === 401) {
+            clearTimeout(timer)
+            return done('unauthorized')
+          }
+        } catch { /* ignore non-JSON frames */ }
       }
       ws.onerror = () => { clearTimeout(timer); done('unreachable') }
       ws.onclose = (e: CloseEvent) => {
@@ -509,13 +475,13 @@ export default function SettingsScreen() {
     })
     setPairTestStatus(result)
     if (result === 'unreachable') {
-      setPairTestDetail(`Couldn't reach ${url}. Check the desktop is running and on the same Tailscale.`)
+      setPairTestDetail(`Couldn't reach ${storedUrl}. Check the desktop is running and on the same Tailscale.`)
     } else if (result === 'unauthorized') {
       setPairTestDetail('Server rejected the token (401). Re-pair from the desktop.')
     } else {
       setPairTestDetail('Connected — token accepted.')
     }
-  }, [realtimeApiKey, realtimeServerUrl])
+  }, [])
 
   const forgetPairing = useCallback(() => {
     Alert.alert(
@@ -553,34 +519,13 @@ export default function SettingsScreen() {
       <ScrollView testID="settings-scroll" contentContainerStyle={{ padding: 16, gap: 16 }} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled">
         <Card testID="voice-pipeline-card" className="gap-4 p-4">
           <View className="gap-1">
-            <Text className="text-lg font-semibold text-foreground">VoiceClaw Desktop</Text>
+            <Text className="text-lg font-semibold text-foreground">Voice Mode</Text>
             <Text className="text-xs text-muted-foreground">
-              Connect to your VoiceClaw desktop — it runs the model and the tools. Point this at the desktop's address and the app talks to it from there.
+              Pick the realtime model and voice the desktop should use for this call.
             </Text>
           </View>
 
           <>
-              <View className="gap-2">
-                <Text className="text-sm text-muted-foreground">VoiceClaw Desktop URL</Text>
-                <Input
-                  placeholder={DEFAULT_REALTIME_SERVER_URL}
-                  value={realtimeServerUrl}
-                  onChangeText={updateRealtimeServerUrl}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                />
-              </View>
-
-              <View className="gap-2">
-                <Text className="text-sm text-muted-foreground">API Key</Text>
-                <SecretInput
-                  value={realtimeApiKey}
-                  onChangeText={updateRealtimeApiKey}
-                  placeholder="Enter your API key"
-                />
-              </View>
-
               <View className="gap-2">
                 <Text className="text-sm text-muted-foreground">Model</Text>
                 <OptionGroup
@@ -630,55 +575,6 @@ export default function SettingsScreen() {
                 </View>
               </View>
 
-              <View className="rounded-lg border border-input bg-background/50 p-3 dark:bg-input/20">
-                <Text className="mb-1 text-xs font-medium text-muted-foreground">Setup</Text>
-                <Text className="text-xs leading-5 text-muted-foreground">
-                  1. Start VoiceClaw on your desktop (it runs the relay){'\n'}
-                  2. Paste the desktop's address into "VoiceClaw Desktop URL"{'\n'}
-                  3. Paste the matching API key
-                </Text>
-              </View>
-
-              <View className={`flex-row items-center gap-2 rounded-lg border px-3 py-2 ${
-                realtimeTestStatus === 'ok' ? 'border-brand-sage/30 bg-brand-sage/10'
-                : realtimeTestStatus === 'error' ? 'border-destructive/50 bg-destructive/5'
-                : 'border-input'
-              }`}>
-                {realtimeTestStatus === 'testing' ? (
-                  <ActivityIndicator size="small" color={palette.muted} />
-                ) : (
-                  <Icon
-                    as={realtimeTestStatus === 'ok' ? WifiIcon : WifiOffIcon}
-                    size={16}
-                    className={
-                      realtimeTestStatus === 'ok' ? 'text-brand-sage'
-                      : realtimeTestStatus === 'error' ? 'text-destructive'
-                      : 'text-muted-foreground'
-                    }
-                  />
-                )}
-                <Text
-                  className={`flex-1 text-sm ${
-                    realtimeTestStatus === 'ok' ? 'text-brand-sage'
-                    : realtimeTestStatus === 'error' ? 'text-destructive'
-                    : 'text-muted-foreground'
-                  }`}
-                  numberOfLines={12}
-                  selectable
-                >
-                  {realtimeTestStatus === 'ok' ? 'Connected'
-                  : realtimeTestStatus === 'testing' ? 'Testing...'
-                  : realtimeTestStatus === 'error' ? realtimeTestError
-                  : 'Not tested'}
-                </Text>
-                <Pressable
-                  onPress={testRealtimeConnection}
-                  disabled={realtimeTestStatus === 'testing'}
-                  className={`rounded-md px-3 py-1 ${realtimeTestStatus === 'testing' ? 'opacity-50' : ''} bg-primary/10`}
-                >
-                  <Text className="text-sm font-medium text-primary">Test</Text>
-                </Pressable>
-              </View>
           </>
         </Card>
 
@@ -747,6 +643,12 @@ export default function SettingsScreen() {
               <Text className="text-sm font-medium text-primary">Test</Text>
             </Pressable>
           </View>
+
+          {pairTestUrl ? (
+            <Text className="text-[11px] text-muted-foreground" selectable>
+              Tested against {pairTestUrl}
+            </Text>
+          ) : null}
 
           {realtimeApiKey ? (
             <View className="flex-row items-center justify-between">
