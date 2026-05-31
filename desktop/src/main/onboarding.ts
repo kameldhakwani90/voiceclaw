@@ -73,11 +73,20 @@ export function ensureOnboardingSchema(): void {
       token_hash TEXT NOT NULL UNIQUE,
       created_at INTEGER NOT NULL,
       last_used_at INTEGER,
-      revoked INTEGER NOT NULL DEFAULT 0
+      revoked INTEGER NOT NULL DEFAULT 0,
+      kind TEXT NOT NULL DEFAULT 'user'
     );
 
     CREATE INDEX IF NOT EXISTS idx_device_tokens_hash ON device_tokens(token_hash);
   `)
+  // Older installs may have the device_tokens table without a `kind` column.
+  // SQLite's ALTER TABLE ADD COLUMN is the only way to migrate in place; we
+  // ignore "duplicate column" errors so this runs idempotently.
+  try {
+    db.exec(`ALTER TABLE device_tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'user'`)
+  } catch {
+    // column already exists
+  }
 }
 
 export function getOnboardingState(): OnboardingState {

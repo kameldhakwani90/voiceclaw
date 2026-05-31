@@ -311,7 +311,7 @@ export function DevicesCard() {
                     >
                       Rename
                     </Button>
-                    {!d.revoked && (
+                    {d.kind !== 'system' && !d.revoked && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -320,13 +320,15 @@ export function DevicesCard() {
                         Revoke
                       </Button>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => void handleRemove(d.id)}
-                    >
-                      Remove
-                    </Button>
+                    {d.kind !== 'system' && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void handleRemove(d.id)}
+                      >
+                        Remove
+                      </Button>
+                    )}
                   </div>
                 )}
               </li>

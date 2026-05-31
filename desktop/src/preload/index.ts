@@ -86,6 +86,7 @@ type DeviceListRow = {
   createdAt: number
   lastUsedAt: number | null
   revoked: boolean
+  kind: 'user' | 'system'
 }
 
 const electronAPI = {

@@ -14,6 +14,7 @@ type Row = {
   created_at: number
   last_used_at: number | null
   revoked: number
+  kind: 'user' | 'system'
 }
 
 let rows: Map<string, Row>
@@ -32,11 +33,11 @@ const fakeDb = {
   prepare: (sql: string) => {
     if (
       sql ===
-      `INSERT INTO device_tokens (id, label, token_hash, created_at, last_used_at, revoked)
-     VALUES (?, ?, ?, ?, NULL, 0)`
+      `INSERT INTO device_tokens (id, label, token_hash, created_at, last_used_at, revoked, kind)
+     VALUES (?, ?, ?, ?, NULL, 0, ?)`
     ) {
       return {
-        run: (id: string, label: string, hash: string, createdAt: number) => {
+        run: (id: string, label: string, hash: string, createdAt: number, kind: 'user' | 'system') => {
           for (const existing of rows.values()) {
             if (existing.token_hash === hash) {
               throw new Error('UNIQUE constraint failed: device_tokens.token_hash')
@@ -49,13 +50,14 @@ const fakeDb = {
             created_at: createdAt,
             last_used_at: null,
             revoked: 0,
+            kind,
           })
         },
       }
     }
     if (
       sql ===
-      `SELECT id, label, created_at AS createdAt, last_used_at AS lastUsedAt, revoked
+      `SELECT id, label, created_at AS createdAt, last_used_at AS lastUsedAt, revoked, kind
        FROM device_tokens
        ORDER BY created_at DESC`
     ) {
@@ -69,7 +71,41 @@ const fakeDb = {
               createdAt: r.created_at,
               lastUsedAt: r.last_used_at,
               revoked: r.revoked,
+              kind: r.kind,
             })),
+      }
+    }
+    if (sql === 'SELECT kind FROM device_tokens WHERE id = ?') {
+      return {
+        get: (id: string) => {
+          const row = rows.get(id)
+          return row ? { kind: row.kind } : undefined
+        },
+      }
+    }
+    if (
+      sql ===
+      `SELECT id, label, created_at AS createdAt, last_used_at AS lastUsedAt, revoked, kind
+       FROM device_tokens
+       WHERE kind = 'system'
+       ORDER BY created_at ASC
+       LIMIT 1`
+    ) {
+      return {
+        get: () => {
+          const sys = [...rows.values()]
+            .filter((r) => r.kind === 'system')
+            .sort((a, b) => a.created_at - b.created_at)[0]
+          if (!sys) return undefined
+          return {
+            id: sys.id,
+            label: sys.label,
+            createdAt: sys.created_at,
+            lastUsedAt: sys.last_used_at,
+            revoked: sys.revoked,
+            kind: sys.kind,
+          }
+        },
       }
     }
     if (sql === 'UPDATE device_tokens SET revoked = 1 WHERE id = ?') {
@@ -261,6 +297,29 @@ describe('device tokens', () => {
     expect(renameDeviceTokenIfDefault('0'.repeat(64), 'foo')).toBe(false)
     expect(renameDeviceTokenIfDefault(hashDeviceToken(t.plaintext), '   ')).toBe(false)
     expect(rows.get(t.id)!.label).toBe('New device · x')
+  })
+
+  it('system tokens cannot be revoked or removed via IPC-shaped helpers', async () => {
+    const { createDeviceToken, revokeDeviceToken, removeDeviceToken, getSystemDeviceToken } =
+      await import('./device-tokens')
+    const sys = createDeviceToken('This Mac', { kind: 'system' })
+    expect(() => revokeDeviceToken(sys.id)).toThrow(/own device token/)
+    expect(() => removeDeviceToken(sys.id)).toThrow(/own device token/)
+    // Row still present and not revoked.
+    const found = getSystemDeviceToken()
+    expect(found?.id).toBe(sys.id)
+    expect(found?.revoked).toBe(false)
+  })
+
+  it('getSystemDeviceToken returns null when no system row exists, else the lone system row', async () => {
+    const { createDeviceToken, getSystemDeviceToken } = await import('./device-tokens')
+    expect(getSystemDeviceToken()).toBeNull()
+    createDeviceToken('user phone', { kind: 'user' })
+    expect(getSystemDeviceToken()).toBeNull()
+    const sys = createDeviceToken('This Mac', { kind: 'system' })
+    const found = getSystemDeviceToken()
+    expect(found?.id).toBe(sys.id)
+    expect(found?.kind).toBe('system')
   })
 
   it('touchDeviceToken bumps last_used_at', async () => {
