@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import QRCode from 'qrcode'
 import { Card } from './ui/Card'
 import { Button } from './ui/Button'
@@ -516,7 +517,7 @@ function ModalShell({
   children: React.ReactNode
   onClose: () => void
 }) {
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onClick={(e) => {
@@ -530,7 +531,8 @@ function ModalShell({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
