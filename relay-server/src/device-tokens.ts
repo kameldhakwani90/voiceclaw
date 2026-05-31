@@ -1,25 +1,34 @@
+import { readFileSync, statSync } from "node:fs"
+import { homedir, platform } from "node:os"
+import { join } from "node:path"
 import { log, error as logError } from "./log.js"
 
 // Per-device-token validation client. The relay does NOT open the
 // desktop SQLite DB directly (avoids a second native build of
 // better-sqlite3 with a different ABI from the one the desktop
 // rebuilds against Electron). Instead the desktop main process
-// exposes a tiny loopback HTTP bridge and hands us the URL + a
-// per-launch nonce via env. The bridge owns the storage AND the
+// exposes a tiny loopback HTTP bridge that owns the storage AND the
 // hashing — we forward the plaintext token over 127.0.0.1 and the
 // bridge tells us "is this valid?".
 //
-// Env contract (set by the desktop):
-//   VOICECLAW_DEVICE_TOKEN_CHECK_URL    e.g. http://127.0.0.1:54213
-//   VOICECLAW_DEVICE_TOKEN_CHECK_NONCE  per-launch random hex
+// Two ways to find the bridge:
+//   1. Env vars VOICECLAW_DEVICE_TOKEN_CHECK_URL + _NONCE — injected
+//      by the desktop when it spawns the bundled relay itself.
+//   2. Discovery file at <userData>/device-token-bridge.json — written
+//      by the desktop on bridge start, removed on shutdown. Lets a
+//      standalone `yarn dev` relay (started by a developer in a
+//      separate shell, NOT spawned by Electron) talk to the running
+//      desktop bridge without any per-launch env wiring. The file is
+//      0600 and contains {url, nonce, pid, startedAt}.
 //
-// Standalone `yarn dev` against this relay won't have either set —
-// `checkDeviceToken` returns `{ ok: false }` in that case, and the
-// caller falls through to whatever auth path is appropriate
-// (master-key with RELAY_API_KEY, or the dev-hatch).
+// When neither is available (no desktop running at all),
+// `checkDeviceToken` returns `{ ok: false }` and the caller falls
+// through to the master-key path.
 
 const NONCE_HEADER = "x-voiceclaw-nonce"
 const REQUEST_TIMEOUT_MS = 2_000
+const DISCOVERY_FILE_NAME = "device-token-bridge.json"
+const DISCOVERY_CACHE_TTL_MS = 5_000
 
 export type DeviceTokenCheck =
   | { ok: true; deviceId: string }
@@ -101,11 +110,87 @@ export async function touchDeviceToken(deviceId: string): Promise<void> {
   }
 }
 
-function getBridgeConfig(): { url: string; nonce: string } | null {
+export type BridgeConfig = { url: string; nonce: string; source: "env" | "discovery" }
+
+let discoveryCache: { value: BridgeConfig | null; loadedAt: number; mtimeMs: number } | null = null
+
+function readDiscoveryFile(): BridgeConfig | null {
+  const path = getDiscoveryFilePath()
+  if (!path) return null
+  try {
+    const stat = statSync(path)
+    if (
+      discoveryCache &&
+      discoveryCache.mtimeMs === stat.mtimeMs &&
+      Date.now() - discoveryCache.loadedAt < DISCOVERY_CACHE_TTL_MS
+    ) {
+      return discoveryCache.value
+    }
+    const raw = readFileSync(path, "utf-8")
+    const parsed = JSON.parse(raw) as { url?: unknown; nonce?: unknown }
+    if (typeof parsed.url !== "string" || typeof parsed.nonce !== "string") {
+      discoveryCache = { value: null, loadedAt: Date.now(), mtimeMs: stat.mtimeMs }
+      return null
+    }
+    const value: BridgeConfig = {
+      url: parsed.url.replace(/\/$/, ""),
+      nonce: parsed.nonce,
+      source: "discovery",
+    }
+    discoveryCache = { value, loadedAt: Date.now(), mtimeMs: stat.mtimeMs }
+    return value
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      discoveryCache = { value: null, loadedAt: Date.now(), mtimeMs: 0 }
+      return null
+    }
+    log(
+      `[device-tokens] discovery file read failed (ignored): ${err instanceof Error ? err.message : String(err)}`,
+    )
+    return null
+  }
+}
+
+export function getDiscoveryFilePath(): string | null {
+  const override = process.env.VOICECLAW_DEVICE_TOKEN_DISCOVERY_FILE?.trim()
+  if (override) return override
+  const dataDir = getDesktopUserDataDir()
+  if (!dataDir) return null
+  return join(dataDir, DISCOVERY_FILE_NAME)
+}
+
+function getDesktopUserDataDir(): string | null {
+  const override = process.env.VOICECLAW_DESKTOP_USER_DATA_DIR?.trim()
+  if (override) return override
+  const home = homedir()
+  if (!home) return null
+  switch (platform()) {
+    case "darwin":
+      return join(home, "Library", "Application Support", "voiceclaw-desktop")
+    case "win32": {
+      const appData = process.env.APPDATA?.trim()
+      if (appData) return join(appData, "voiceclaw-desktop")
+      return join(home, "AppData", "Roaming", "voiceclaw-desktop")
+    }
+    default: {
+      const xdg = process.env.XDG_CONFIG_HOME?.trim()
+      if (xdg) return join(xdg, "voiceclaw-desktop")
+      return join(home, ".config", "voiceclaw-desktop")
+    }
+  }
+}
+
+export function getBridgeConfig(): BridgeConfig | null {
   const url = process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL?.trim()
   const nonce = process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE?.trim()
-  if (!url || !nonce) return null
-  return { url: url.replace(/\/$/, ""), nonce }
+  if (url && nonce) {
+    return { url: url.replace(/\/$/, ""), nonce, source: "env" }
+  }
+  return readDiscoveryFile()
+}
+
+export function __resetBridgeDiscoveryCacheForTests(): void {
+  discoveryCache = null
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {

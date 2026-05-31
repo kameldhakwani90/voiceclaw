@@ -3,7 +3,12 @@
 import { randomUUID, timingSafeEqual } from "node:crypto"
 import { context, ROOT_CONTEXT } from "@opentelemetry/api"
 import type { WebSocket } from "ws"
-import { checkDeviceToken, identifyDeviceToken, touchDeviceToken } from "./device-tokens.js"
+import {
+  checkDeviceToken,
+  getBridgeConfig,
+  identifyDeviceToken,
+  touchDeviceToken,
+} from "./device-tokens.js"
 import type {
   ClientEvent,
   SessionConfigEvent,
@@ -881,7 +886,9 @@ export class RelaySession {
   private async handleSessionAuth(apiKey: unknown, deviceName?: string) {
     const credential = await checkRelayCredential(apiKey)
     if (!credential.ok) {
-      log(`[session:${this.id}] session.auth failed`)
+      log(
+        `[session:${this.id}] session.auth failed (apiKey=${previewCredential(apiKey)}, reason=${credential.reason}: ${describeRejectReason(credential.reason)})`,
+      )
       this.sendError("unauthorized", 401)
       try { this.ws.close(1008, "unauthorized") } catch { /* ignore */ }
       return
@@ -1077,7 +1084,9 @@ export class RelaySession {
     // and `yarn dev`) OR a valid per-device token (paired mobile clients).
     const credential = await checkRelayCredential(config.apiKey)
     if (!credential.ok) {
-      log(`[session:${this.id}] Auth failed — invalid API key`)
+      log(
+        `[session:${this.id}] Auth failed — invalid API key (apiKey=${previewCredential(config.apiKey)}, reason=${credential.reason}: ${describeRejectReason(credential.reason)})`,
+      )
       this.sendError("unauthorized", 401)
       this.ws.close()
       return
@@ -1332,18 +1341,23 @@ async function retryTranscriptSync(opts: {
 //   3. Per-device token — calls the localhost bridge owned by the desktop
 //      main process. Live revocation: the bridge re-checks SQLite on every
 //      call, so flipping `revoked = 1` rejects the next reconnect.
+export type CredentialRejectReason =
+  | "no-credential"
+  | "master-key-mismatch-no-bridge"
+  | "master-key-mismatch-token-unknown"
+
 type CredentialResult =
   | { ok: true; via: "dev-hatch" }
   | { ok: true; via: "master-key" }
   | { ok: true; via: "device-token"; deviceId: string }
-  | { ok: false }
+  | { ok: false; reason: CredentialRejectReason }
 
 export async function checkRelayCredential(provided: unknown): Promise<CredentialResult> {
   if (isUnauthenticatedAllowed()) {
     return { ok: true, via: "dev-hatch" }
   }
   if (typeof provided !== "string" || provided.length === 0) {
-    return { ok: false }
+    return { ok: false, reason: "no-credential" }
   }
   const expected = process.env.RELAY_API_KEY?.trim()
   if (expected && constantTimeMatch(provided, expected)) {
@@ -1353,7 +1367,28 @@ export async function checkRelayCredential(provided: unknown): Promise<Credentia
   if (token.ok) {
     return { ok: true, via: "device-token", deviceId: token.deviceId }
   }
-  return { ok: false }
+  const bridge = getBridgeConfig()
+  return {
+    ok: false,
+    reason: bridge ? "master-key-mismatch-token-unknown" : "master-key-mismatch-no-bridge",
+  }
+}
+
+export function describeRejectReason(reason: CredentialRejectReason): string {
+  switch (reason) {
+    case "no-credential":
+      return "no apiKey on session.auth"
+    case "master-key-mismatch-no-bridge":
+      return "master key did not match and no device-token bridge is reachable (relay is not configured for paired devices — start the desktop app, or set VOICECLAW_DEVICE_TOKEN_CHECK_URL/_NONCE)"
+    case "master-key-mismatch-token-unknown":
+      return "master key did not match and the bridge does not recognize this device token (unpaired or revoked)"
+  }
+}
+
+export function previewCredential(provided: unknown): string {
+  if (typeof provided !== "string" || provided.length === 0) return "<empty>"
+  if (provided.length <= 10) return `${provided.slice(0, 2)}…(len=${provided.length})`
+  return `${provided.slice(0, 6)}…${provided.slice(-4)} (len=${provided.length})`
 }
 
 function constantTimeMatch(a: string, b: string): boolean {
