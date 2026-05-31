@@ -20,11 +20,11 @@ const fakeDb = {
   prepare: (sql: string) => {
     if (
       sql ===
-      `INSERT INTO device_tokens (id, label, token_hash, created_at, last_used_at, revoked)
-     VALUES (?, ?, ?, ?, NULL, 0)`
+      `INSERT INTO device_tokens (id, label, token_hash, created_at, last_used_at, revoked, kind)
+     VALUES (?, ?, ?, ?, NULL, 0, ?)`
     ) {
       return {
-        run: (id: string, label: string, hash: string, createdAt: number) => {
+        run: (id: string, label: string, hash: string, createdAt: number, _kind: string) => {
           rows.set(id, { id, label, token_hash: hash, created_at: createdAt, last_used_at: null, revoked: 0 })
         },
       }

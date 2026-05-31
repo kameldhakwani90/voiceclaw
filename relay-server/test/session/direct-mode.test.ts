@@ -351,28 +351,30 @@ describe("session direct-mode messages", () => {
       expect(closed).toBe(true)
     })
 
-    it("session.auth with the right master key authenticates with NO device-token bridge env (self-connect regression)", async () => {
-      // Exact desktop self-connect scenario: bundled RELAY_API_KEY, no
-      // device-token bridge URL/nonce in env. Must succeed without ever
-      // contacting the bridge, otherwise the desktop's own relay-client
-      // and `yarn dev` lock themselves out.
-      delete process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL
-      delete process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE
+    it("session.auth with a valid device token (system or paired) authenticates via the bridge — no master-key shortcut", async () => {
+      // Post-drop-master-key: the desktop's own self-connect uses its
+      // 'system'-kind device token, which the bridge vouches for the same
+      // way it vouches for a paired phone. There is no env-var bypass.
+      process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL = "http://127.0.0.1:65535"
+      process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = "n"
       let fetchCalled = false
       const original = globalThis.fetch
       globalThis.fetch = (async () => {
         fetchCalled = true
-        return new Response("fail", { status: 500 })
+        return new Response(
+          JSON.stringify({ ok: true, deviceId: "this-mac" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
       }) as typeof fetch
       try {
         const { session, sent, fakeWs } = mountSession()
         let closed = false
         fakeWs.close = () => { closed = true }
-        await deliver(session, { type: "session.auth", apiKey: "the-real-key" })
+        await deliver(session, { type: "session.auth", apiKey: "vcd_system-token" })
         const ok = sent.find((e) => e.type === "session.auth.ok")
         expect(ok).toBeDefined()
         expect(closed).toBe(false)
-        expect(fetchCalled).toBe(false)
+        expect(fetchCalled).toBe(true)
       } finally {
         globalThis.fetch = original
       }
@@ -380,8 +382,17 @@ describe("session direct-mode messages", () => {
 
     it("session.auth with the right key flips the gate and subsequent tool.exec works", async () => {
       process.env.GEMINI_API_KEY = "stub-relay-key"
+      process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL = "http://127.0.0.1:65535"
+      process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = "n"
+      const original = globalThis.fetch
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ ok: true, deviceId: "this-mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch
       const { session, sent } = mountSession()
-      await deliver(session, { type: "session.auth", apiKey: "the-real-key" })
+      await deliver(session, { type: "session.auth", apiKey: "vcd_system-token" })
+      globalThis.fetch = original
       const ok = sent.find((e) => e.type === "session.auth.ok")
       expect(ok).toBeDefined()
       // Now mint_token should succeed (with a mocked auth_tokens upstream).
