@@ -1,15 +1,30 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { checkDeviceToken, identifyDeviceToken, touchDeviceToken } from "../src/device-tokens.js"
+import {
+  __resetBridgeDiscoveryCacheForTests,
+  checkDeviceToken,
+  getBridgeConfig,
+  identifyDeviceToken,
+  touchDeviceToken,
+} from "../src/device-tokens.js"
 
 describe("checkDeviceToken", () => {
   let prevUrl: string | undefined
   let prevNonce: string | undefined
+  let prevDiscoveryFile: string | undefined
+  let prevUserDataDir: string | undefined
 
   beforeEach(() => {
     prevUrl = process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL
     prevNonce = process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE
+    prevDiscoveryFile = process.env.VOICECLAW_DEVICE_TOKEN_DISCOVERY_FILE
+    prevUserDataDir = process.env.VOICECLAW_DESKTOP_USER_DATA_DIR
     process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL = "http://127.0.0.1:65535"
     process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = "nonce-xyz"
+    process.env.VOICECLAW_DEVICE_TOKEN_DISCOVERY_FILE = "/tmp/voiceclaw-test-no-such-discovery.json"
+    __resetBridgeDiscoveryCacheForTests()
   })
 
   afterEach(() => {
@@ -17,6 +32,11 @@ describe("checkDeviceToken", () => {
     else process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL = prevUrl
     if (prevNonce === undefined) delete process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE
     else process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = prevNonce
+    if (prevDiscoveryFile === undefined) delete process.env.VOICECLAW_DEVICE_TOKEN_DISCOVERY_FILE
+    else process.env.VOICECLAW_DEVICE_TOKEN_DISCOVERY_FILE = prevDiscoveryFile
+    if (prevUserDataDir === undefined) delete process.env.VOICECLAW_DESKTOP_USER_DATA_DIR
+    else process.env.VOICECLAW_DESKTOP_USER_DATA_DIR = prevUserDataDir
+    __resetBridgeDiscoveryCacheForTests()
   })
 
   it("posts the plaintext token to the bridge with the nonce header", async () => {
@@ -145,6 +165,86 @@ describe("checkDeviceToken", () => {
     expect(seen[0].url).toContain("/device-token/touch")
     expect(JSON.parse(seen[0].body)).toEqual({ id: "dev-42" })
     expect(seen[0].headers["x-voiceclaw-nonce"]).toBe("nonce-xyz")
+  })
+})
+
+describe("bridge discovery file fallback", () => {
+  let tmp: string
+  let discoveryPath: string
+  let prevEnv: { url?: string; nonce?: string; discoveryFile?: string; userDataDir?: string } = {}
+
+  beforeEach(() => {
+    prevEnv = {
+      url: process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL,
+      nonce: process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE,
+      discoveryFile: process.env.VOICECLAW_DEVICE_TOKEN_DISCOVERY_FILE,
+      userDataDir: process.env.VOICECLAW_DESKTOP_USER_DATA_DIR,
+    }
+    delete process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL
+    delete process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE
+    tmp = mkdtempSync(join(tmpdir(), "voiceclaw-discovery-"))
+    discoveryPath = join(tmp, "device-token-bridge.json")
+    process.env.VOICECLAW_DEVICE_TOKEN_DISCOVERY_FILE = discoveryPath
+    __resetBridgeDiscoveryCacheForTests()
+  })
+
+  afterEach(() => {
+    if (prevEnv.url === undefined) delete process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL
+    else process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL = prevEnv.url
+    if (prevEnv.nonce === undefined) delete process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE
+    else process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = prevEnv.nonce
+    if (prevEnv.discoveryFile === undefined) delete process.env.VOICECLAW_DEVICE_TOKEN_DISCOVERY_FILE
+    else process.env.VOICECLAW_DEVICE_TOKEN_DISCOVERY_FILE = prevEnv.discoveryFile
+    if (prevEnv.userDataDir === undefined) delete process.env.VOICECLAW_DESKTOP_USER_DATA_DIR
+    else process.env.VOICECLAW_DESKTOP_USER_DATA_DIR = prevEnv.userDataDir
+    rmSync(tmp, { recursive: true, force: true })
+    __resetBridgeDiscoveryCacheForTests()
+  })
+
+  it("returns null when neither env nor file is present", () => {
+    expect(getBridgeConfig()).toBeNull()
+  })
+
+  it("reads {url, nonce} from the discovery file when env is unset", () => {
+    writeFileSync(
+      discoveryPath,
+      JSON.stringify({ url: "http://127.0.0.1:55555", nonce: "disc-nonce", pid: 999 }),
+    )
+    const cfg = getBridgeConfig()
+    expect(cfg).toEqual({ url: "http://127.0.0.1:55555", nonce: "disc-nonce", source: "discovery" })
+  })
+
+  it("env wins over discovery file when both are present", () => {
+    process.env.VOICECLAW_DEVICE_TOKEN_CHECK_URL = "http://127.0.0.1:11111"
+    process.env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = "env-nonce"
+    writeFileSync(
+      discoveryPath,
+      JSON.stringify({ url: "http://127.0.0.1:55555", nonce: "disc-nonce" }),
+    )
+    const cfg = getBridgeConfig()
+    expect(cfg?.source).toBe("env")
+    expect(cfg?.url).toBe("http://127.0.0.1:11111")
+    expect(cfg?.nonce).toBe("env-nonce")
+  })
+
+  it("uses discovery file to validate a token via the relay's bridge call", async () => {
+    writeFileSync(
+      discoveryPath,
+      JSON.stringify({ url: "http://127.0.0.1:55555", nonce: "disc-nonce" }),
+    )
+    let observedHeaders: Record<string, string> | undefined
+    using _ = withFetch(async (_input, init) => {
+      observedHeaders = init?.headers as Record<string, string>
+      return new Response(JSON.stringify({ ok: true, deviceId: "dev-disc" }), { status: 200 })
+    })
+    const result = await checkDeviceToken("vcd_plain")
+    expect(result).toEqual({ ok: true, deviceId: "dev-disc" })
+    expect(observedHeaders?.["x-voiceclaw-nonce"]).toBe("disc-nonce")
+  })
+
+  it("ignores a malformed discovery file (missing fields)", () => {
+    writeFileSync(discoveryPath, JSON.stringify({ url: "http://127.0.0.1:1" }))
+    expect(getBridgeConfig()).toBeNull()
   })
 })
 

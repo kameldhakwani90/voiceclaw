@@ -12,6 +12,7 @@ import { getTestPageHTML } from "./test-page.js"
 import { log, warn, error as logError } from "./log.js"
 import { gracefulShutdown } from "./shutdown.js"
 import { createRelayServer } from "./server-factory.js"
+import { getBridgeConfig, getDiscoveryFilePath } from "./device-tokens.js"
 
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
@@ -111,6 +112,17 @@ server.listen(PORT, HOST, () => {
     if (isTestPageEnabled()) {
       log(`  Test page: ${httpScheme}://${lanIP}:${PORT}/test`)
     }
+  }
+  const bridge = getBridgeConfig()
+  if (bridge) {
+    log(`Device-token bridge: ${bridge.url} (source=${bridge.source})`)
+  } else {
+    const discoveryPath = getDiscoveryFilePath()
+    warn(
+      `Device-token bridge: NOT CONFIGURED — paired mobile clients (vcd_ tokens) will be rejected with 401. ` +
+      `Start the desktop app so it writes the discovery file at ${discoveryPath ?? "<unknown>"}, ` +
+      `or export VOICECLAW_DEVICE_TOKEN_CHECK_URL + VOICECLAW_DEVICE_TOKEN_CHECK_NONCE before starting the relay.`,
+    )
   }
 })
 

@@ -1,6 +1,9 @@
 import { randomBytes } from 'node:crypto'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { join } from 'node:path'
 import { URL } from 'node:url'
+import { app } from 'electron'
 import {
   hashDeviceToken,
   lookupDeviceTokenByHash,
@@ -25,6 +28,7 @@ import {
 // (VOICECLAW_DEVICE_TOKEN_CHECK_URL, VOICECLAW_DEVICE_TOKEN_CHECK_NONCE).
 
 const NONCE_HEADER = 'x-voiceclaw-nonce'
+const DISCOVERY_FILE_NAME = 'device-token-bridge.json'
 
 export type DeviceTokenBridgeHandle = {
   url: string
@@ -38,16 +42,23 @@ export function getDeviceTokenBridge(): DeviceTokenBridgeHandle | null {
   return active
 }
 
+export function getDeviceTokenBridgeDiscoveryPath(): string {
+  return join(app.getPath('userData'), DISCOVERY_FILE_NAME)
+}
+
 export async function startDeviceTokenBridge(): Promise<DeviceTokenBridgeHandle> {
   if (active) return active
   const nonce = randomBytes(32).toString('hex')
   const server = createServer((req, res) => handleRequest(req, res, nonce))
   const port = await listen(server)
+  const url = `http://127.0.0.1:${port}`
+  const discoveryPath = writeDiscoveryFile({ url, nonce })
   const handle: DeviceTokenBridgeHandle = {
-    url: `http://127.0.0.1:${port}`,
+    url,
     nonce,
     close: () =>
       new Promise<void>((resolve) => {
+        removeDiscoveryFile(discoveryPath)
         server.close(() => resolve())
       }),
   }
@@ -60,6 +71,31 @@ export async function stopDeviceTokenBridge(): Promise<void> {
   const handle = active
   active = null
   await handle.close()
+}
+
+function writeDiscoveryFile(payload: { url: string; nonce: string }): string | null {
+  try {
+    const path = getDeviceTokenBridgeDiscoveryPath()
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(
+      path,
+      JSON.stringify({ ...payload, pid: process.pid, startedAt: Date.now() }, null, 2),
+      { mode: 0o600 },
+    )
+    return path
+  } catch (err) {
+    console.warn('[device-token-bridge] failed to write discovery file', err)
+    return null
+  }
+}
+
+function removeDiscoveryFile(path: string | null): void {
+  if (!path) return
+  try {
+    rmSync(path, { force: true })
+  } catch (err) {
+    console.warn('[device-token-bridge] failed to remove discovery file', err)
+  }
 }
 
 function listen(server: Server): Promise<number> {
