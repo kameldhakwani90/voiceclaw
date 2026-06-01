@@ -1,669 +1,207 @@
-import type { ReactNode } from "react"
 import Link from "next/link"
 import {
   ArrowRight,
-  Download,
+  CheckCircle2,
+  KeyRound,
+  LockKeyhole,
   Mic,
-  PlayCircle,
   RadioTower,
-  Route,
+  Server,
   ShieldCheck,
+  Smartphone,
   TerminalSquare,
 } from "lucide-react"
-import {
-  BrandWordmark,
-  PRODUCT_PROOF,
-  SectionHeading,
-  SignalBars,
-  StatBlock,
-  VoiceClawMark,
-} from "@/components/brand/brand-system"
-import { ThemeSwitcher } from "@/components/theme-switcher"
-import { TrackCtaLink } from "@/components/telemetry/track-cta"
-import {
-  getLatestMacReleaseDownload,
-  type MacReleaseDownload,
-} from "@/lib/downloads"
 
-const REPO_URL = "https://github.com/yagudaev/voiceclaw"
-const DOCS_URL = "https://docs.getvoiceclaw.com"
-const MAC_DOWNLOAD_URL = "/download"
-const TESTFLIGHT_SIGNUP_URL = ""
-const DEMO_EMBED_URL = "https://www.youtube.com/embed/iAS7vj2vRaA"
-const HERO_BARS = [26, 44, 58, 42, 24, 34, 52, 78, 50, 31, 66, 86, 60, 38, 54, 82, 48, 72]
+const setupSteps = [
+  {
+    title: "Create your account",
+    description: "Use Hello from Safari, Chrome, or any mobile browser.",
+    icon: CheckCircle2,
+  },
+  {
+    title: "Add your provider key",
+    description: "Store your OpenAI key server-side so the browser never exposes it.",
+    icon: KeyRound,
+  },
+  {
+    title: "Connect your Mac",
+    description: "Run the local connector next to OpenClaw, GBrain, or your own agent.",
+    icon: TerminalSquare,
+  },
+  {
+    title: "Talk from the site",
+    description: "The public relay handles voice while your private agent stays private.",
+    icon: Mic,
+  },
+]
 
-export default async function Home() {
-  const macRelease = await getLatestMacReleaseDownload()
+const statusItems = [
+  ["Domain", "hello.capnio.pro"],
+  ["Runtime", "VPS relay + web app"],
+  ["Agent route", "Private secure bridge"],
+  ["Repository", "Public MIT fork"],
+]
 
+export default function Home() {
   return (
-    <div className="min-h-screen text-[var(--brand-ink)]">
-      <Header macRelease={macRelease} />
-      <main>
-        <HeroSection macRelease={macRelease} />
-        <DemoSection />
-        <ProofSection />
-        <WorkflowSection />
-        <PlatformSection />
-        <GetStartedSection macRelease={macRelease} />
-      </main>
-      <Footer />
-    </div>
-  )
-}
-
-function Header({
-  macRelease,
-}: {
-  macRelease: MacReleaseDownload | null
-}) {
-  return (
-    <header className="sticky top-0 z-50 border-b border-[var(--brand-line-strong)] bg-[var(--brand-paper)]/90 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 sm:px-8">
-        <Link href="/" aria-label="VoiceClaw home">
-          <BrandWordmark />
-        </Link>
-        <nav className="flex items-center gap-2 text-sm text-[var(--brand-muted)] sm:gap-5">
-          <Link className="hidden hover:text-[var(--brand-ink)] sm:inline" href="#work">
-            How it works
+    <main className="min-h-screen bg-[#f7f3ec] text-[#171412]">
+      <header className="border-b border-[#d8d0c4] bg-[#fffaf2]/90 backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
+          <Link href="/" className="flex items-center gap-3" aria-label="Hello home">
+            <span className="flex size-9 items-center justify-center rounded-md bg-[#171412] text-[#fffaf2]">
+              <RadioTower className="size-5" />
+            </span>
+            <span className="text-lg font-semibold tracking-normal">Hello Capnio</span>
           </Link>
-          <a className="hidden hover:text-[var(--brand-ink)] sm:inline" href={DOCS_URL}>
-            Docs
-          </a>
-          <Link className="hidden hover:text-[var(--brand-ink)] sm:inline" href="/download">
-            Download
-          </Link>
-          <ThemeSwitcher />
-          <TrackCtaLink
-            ctaLocation="header"
-            ctaLabel="Download Mac"
-            href={MAC_DOWNLOAD_URL}
-            aria-label="Download for Mac"
-            title={downloadTitle(macRelease)}
-            className="inline-flex items-center gap-2 rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel)] px-3 py-2 text-[var(--brand-ink)] shadow-[var(--brand-shadow)] transition hover:border-[var(--brand-accent)]"
-          >
-            <Download className="size-4" />
-            <span className="hidden sm:inline">Download Mac</span>
-          </TrackCtaLink>
-        </nav>
-      </div>
-    </header>
-  )
-}
+          <nav className="flex items-center gap-2 text-sm">
+            <a
+              href="#setup"
+              className="hidden rounded-md px-3 py-2 text-[#665f58] transition hover:bg-[#efe7da] hover:text-[#171412] sm:inline-flex"
+            >
+              Setup
+            </a>
+            <a
+              href="#status"
+              className="hidden rounded-md px-3 py-2 text-[#665f58] transition hover:bg-[#efe7da] hover:text-[#171412] sm:inline-flex"
+            >
+              Status
+            </a>
+            <a
+              href="https://github.com/kameldhakwani90/voiceclaw"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-[#cfc5b8] bg-white px-3 font-medium transition hover:border-[#171412]"
+            >
+              GitHub
+              <ArrowRight className="size-4" />
+            </a>
+          </nav>
+        </div>
+      </header>
 
-function HeroSection({
-  macRelease,
-}: {
-  macRelease: MacReleaseDownload | null
-}) {
-  return (
-    <section className="relative isolate overflow-hidden border-b border-[var(--brand-line-strong)] bg-[var(--brand-paper)]">
-      <div className="brand-hero-field absolute inset-0" />
-      <div className="relative mx-auto flex min-h-[calc(100svh-4rem)] max-w-7xl flex-col justify-between px-5 py-10 sm:px-8 sm:py-14">
-        <div className="grid flex-1 items-center gap-10 lg:grid-cols-[minmax(0,0.82fr)_minmax(440px,1fr)]">
-          <div className="max-w-3xl pt-8 sm:pt-14">
-            <div className="mb-8 inline-flex items-center gap-3 rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel)] px-3 py-2 font-mono text-xs text-[var(--brand-muted)] shadow-[var(--brand-shadow)]">
-              <span className="size-2 rounded-full bg-[var(--brand-accent)]" />
-              Open source voice layer
-            </div>
-            <h1 className="font-serif text-5xl leading-none text-[var(--brand-ink)] sm:text-7xl lg:text-8xl">
-              VoiceClaw
-            </h1>
-            <p className="mt-6 max-w-2xl font-serif text-3xl leading-tight text-[var(--brand-ink)] sm:text-5xl">
-              Voice for the agent you already trust.
-            </p>
-            <p className="mt-7 max-w-2xl text-lg leading-8 text-[var(--brand-muted)] sm:text-xl">
-              Talk to your own agent on iPhone and Mac. Point VoiceClaw at an
-              OpenAI-compatible endpoint and it handles the mic, the route, and
-              the transcript while your agent does the real work.
-            </p>
-            <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-              <TrackCtaLink
-                ctaLocation="hero"
-                ctaLabel="Download for Mac"
-                href={MAC_DOWNLOAD_URL}
-                title={downloadTitle(macRelease)}
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-md bg-[var(--brand-accent)] px-5 text-sm font-semibold text-primary-foreground transition hover:bg-[var(--brand-accent-hover)]"
-              >
-                <Download className="size-4" />
-                Download for Mac
-              </TrackCtaLink>
-              <Link
-                href="#demo"
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel)] px-5 text-sm font-semibold text-[var(--brand-ink)] transition hover:border-[var(--brand-accent)]"
-              >
-                <PlayCircle className="size-4" />
-                Watch demo
-              </Link>
-            </div>
-            <MacDownloadVersion release={macRelease} />
-            <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--brand-muted)]">
-              <TestFlightSignupNotice />
-            </p>
-            <div className="mt-8 lg:hidden">
-              <HeroMiniSignal />
-            </div>
+      <section className="mx-auto grid max-w-6xl items-center gap-10 px-5 py-12 md:min-h-[calc(100svh-4rem)] md:grid-cols-[minmax(0,1fr)_420px] md:py-16">
+        <div>
+          <div className="mb-5 inline-flex items-center gap-2 rounded-md border border-[#d8d0c4] bg-white px-3 py-2 text-sm text-[#665f58]">
+            <span className="size-2 rounded-full bg-[#2f8f62]" />
+            VPS-first voice app
           </div>
-          <HeroSignalScene />
+          <h1 className="max-w-3xl text-5xl font-semibold leading-none tracking-normal sm:text-6xl">
+            Talk to your private agent from a public website.
+          </h1>
+          <p className="mt-6 max-w-2xl text-lg leading-8 text-[#665f58]">
+            Hello runs at <strong className="font-semibold text-[#171412]">hello.capnio.pro</strong>.
+            The browser connects to the VPS relay, and the relay reaches your local
+            OpenClaw-compatible agent through a secure bridge.
+          </p>
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <a
+              href="#setup"
+              className="inline-flex h-12 items-center justify-center gap-2 rounded-md bg-[#171412] px-5 text-sm font-semibold text-[#fffaf2] transition hover:bg-[#3a332d]"
+            >
+              <Smartphone className="size-4" />
+              Start from the site
+            </a>
+            <a
+              href="#status"
+              className="inline-flex h-12 items-center justify-center gap-2 rounded-md border border-[#cfc5b8] bg-white px-5 text-sm font-semibold transition hover:border-[#171412]"
+            >
+              <Server className="size-4" />
+              View deployment status
+            </a>
+          </div>
         </div>
-        <div className="mt-8 grid max-w-md grid-cols-3 gap-2 rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel)] p-3 shadow-[var(--brand-shadow)] sm:mt-14 sm:max-w-3xl sm:gap-4 sm:border-0 sm:bg-transparent sm:p-0 sm:shadow-none">
-          {PRODUCT_PROOF.map((item) => (
-            <StatBlock key={item.label} value={item.value} label={item.label} />
-          ))}
-        </div>
-      </div>
-    </section>
-  )
-}
 
-function HeroSignalScene() {
-  return (
-    <div className="relative hidden min-h-[560px] lg:block" aria-hidden="true">
-      <div className="absolute left-0 right-10 top-4 rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-contrast-bg)] p-8 text-[var(--brand-contrast-fg)] shadow-[var(--brand-shadow)]">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <VoiceClawMark className="size-7" accent />
-            <p className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--brand-contrast-muted)]">
-              Live call
+        <div className="rounded-md border border-[#d8d0c4] bg-[#171412] p-5 text-[#fffaf2] shadow-[0_20px_60px_rgba(23,20,18,0.18)]">
+          <div className="flex items-center justify-between border-b border-white/15 pb-4">
+            <div>
+              <p className="text-sm text-white/60">Live route</p>
+              <p className="mt-1 font-mono text-sm">iPhone → VPS → Mac agent</p>
+            </div>
+            <span className="flex size-10 items-center justify-center rounded-md bg-[#2f8f62]">
+              <Mic className="size-5" />
+            </span>
+          </div>
+          <div className="mt-6 space-y-3">
+            <ConsoleLine label="site" value="https://hello.capnio.pro" />
+            <ConsoleLine label="relay" value="wss://hello.capnio.pro/ws" />
+            <ConsoleLine label="brain" value="OpenAI-compatible local endpoint" />
+            <ConsoleLine label="secrets" value="server-side only" />
+          </div>
+          <div className="mt-6 rounded-md border border-white/15 bg-white/5 p-4">
+            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+              <LockKeyhole className="size-4 text-[#7dd6a2]" />
+              Private by default
+            </div>
+            <p className="text-sm leading-6 text-white/68">
+              OpenClaw, GBrain, local files, and tools stay on the user machine.
+              The public app only brokers the voice session and authenticated route.
             </p>
           </div>
-          <span className="inline-flex items-center gap-2 rounded-md border border-[var(--brand-contrast-line)] px-3 py-2 font-mono text-xs uppercase tracking-[0.28em] text-[var(--brand-contrast-fg)]">
-            <span className="size-2 rounded-full bg-[var(--brand-accent)]" />
-            Rec
+        </div>
+      </section>
+
+      <section id="setup" className="border-t border-[#d8d0c4] bg-white px-5 py-14">
+        <div className="mx-auto max-w-6xl">
+          <div className="max-w-2xl">
+            <p className="text-sm font-semibold uppercase text-[#8f4b34]">Setup</p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-normal">
+              The account flow we are building.
+            </h2>
+          </div>
+          <div className="mt-8 grid gap-4 md:grid-cols-4">
+            {setupSteps.map((step) => (
+              <div key={step.title} className="rounded-md border border-[#d8d0c4] bg-[#fffaf2] p-5">
+                <step.icon className="size-5 text-[#8f4b34]" />
+                <h3 className="mt-4 font-semibold">{step.title}</h3>
+                <p className="mt-3 text-sm leading-6 text-[#665f58]">{step.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section id="status" className="px-5 py-14">
+        <div className="mx-auto grid max-w-6xl gap-8 md:grid-cols-[0.75fr_1fr]">
+          <div>
+            <p className="text-sm font-semibold uppercase text-[#8f4b34]">Status</p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-normal">
+              VPS entrypoint first, voice loop next.
+            </h2>
+            <p className="mt-4 leading-7 text-[#665f58]">
+              This public page is the first deployed surface. Next chunks add auth,
+              encrypted key storage, relay configuration, and the Mac mini bridge.
+            </p>
+          </div>
+          <div className="grid gap-3">
+            {statusItems.map(([label, value]) => (
+              <div
+                key={label}
+                className="flex items-center justify-between rounded-md border border-[#d8d0c4] bg-white p-4"
+              >
+                <span className="text-sm text-[#665f58]">{label}</span>
+                <span className="text-right font-mono text-sm">{value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <footer className="border-t border-[#d8d0c4] px-5 py-8 text-sm text-[#665f58]">
+        <div className="mx-auto flex max-w-6xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <span>Hello Capnio</span>
+          <span className="inline-flex items-center gap-2">
+            <ShieldCheck className="size-4" />
+            Public MIT repo, private user agents.
           </span>
         </div>
-        <h2 className="mt-12 font-serif text-5xl leading-none">
-          Listening...
-        </h2>
-        <HeroWaveform className="mt-20 h-32" />
-        <div className="mt-10 grid grid-cols-[80px_1fr_1fr] gap-6">
-          <div
-            className="flex size-20 items-center justify-center rounded-full bg-[var(--brand-accent)] text-primary-foreground"
-            style={{
-              boxShadow:
-                "0 0 0 16px color-mix(in oklch, var(--brand-accent) 18%, transparent)",
-            }}
-          >
-            <Mic className="size-8" />
-          </div>
-          <HeroMetric label="Voice" value="Gemini · Zephyr" />
-          <HeroMetric label="Route" value="OpenAI compatible" />
-        </div>
-      </div>
-      <div className="absolute bottom-6 right-0 w-[58%] rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel)] p-6 shadow-[var(--brand-shadow)]">
-        <div className="mb-5 flex items-center justify-between">
-          <p className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--brand-accent)]">
-            Transcript
-          </p>
-          <p className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--brand-muted)]">
-            Live
-          </p>
-        </div>
-        <div className="space-y-3">
-          <TranscriptBubble speaker="You">
-            Can you update my scratchpad and remind me to launch tomorrow?
-          </TranscriptBubble>
-          <TranscriptBubble speaker="VoiceClaw" active>
-            Done. I found the note and added the reminder.
-          </TranscriptBubble>
-        </div>
-        <div className="mt-5 rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel-strong)] px-4 py-3 font-mono text-xs uppercase tracking-[0.24em] text-[var(--brand-muted)]">
-          <span className="mr-2 inline-block size-2 rounded-full bg-[var(--brand-accent)]" />
-          On-device route active
-        </div>
-      </div>
+      </footer>
+    </main>
+  )
+}
+
+function ConsoleLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[72px_1fr] gap-3 rounded-md bg-white/5 px-3 py-2 font-mono text-sm">
+      <span className="text-white/45">{label}</span>
+      <span className="truncate text-white/82">{value}</span>
     </div>
   )
-}
-
-function HeroMiniSignal() {
-  return (
-    <div className="rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-contrast-bg)] p-5 text-[var(--brand-contrast-fg)] shadow-[var(--brand-shadow)]">
-      <div className="flex items-center justify-between">
-        <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--brand-contrast-muted)]">
-          Live call
-        </p>
-        <span className="inline-flex items-center gap-2 rounded-md border border-[var(--brand-contrast-line)] px-2 py-1 font-mono text-xs uppercase tracking-[0.22em]">
-          <span className="size-2 rounded-full bg-[var(--brand-accent)]" />
-          Rec
-        </span>
-      </div>
-      <HeroWaveform className="mt-7 h-20" />
-    </div>
-  )
-}
-
-function DemoSection() {
-  return (
-    <section
-      id="demo"
-      className="border-b border-[var(--brand-line-strong)] bg-[var(--brand-paper)] px-5 py-20 sm:px-8"
-    >
-      <div className="mx-auto max-w-7xl">
-        <SectionHeading
-          eyebrow="Demo"
-          title="Watch VoiceClaw route a real conversation."
-          description="The launch demo shows VoiceClaw in front of a live working context: mic, transcript, route, and response in one loop."
-        />
-        <div className="mt-10 overflow-hidden rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-ink)] shadow-[var(--brand-shadow)]">
-          <iframe
-            className="aspect-video w-full"
-            src={DEMO_EMBED_URL}
-            title="VoiceClaw demo"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            referrerPolicy="strict-origin-when-cross-origin"
-            allowFullScreen
-          />
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function ProofSection() {
-  return (
-    <section className="border-b border-[var(--brand-line-strong)] bg-[var(--brand-paper)] px-5 py-20 sm:px-8">
-      <div className="mx-auto max-w-7xl">
-        <SectionHeading
-          eyebrow="Why it exists"
-          title="Bring the brain. VoiceClaw keeps the conversation precise."
-          description="Realtime voice models are fast, but your useful agent already knows your tools. VoiceClaw sits between microphone and endpoint as a thin interface layer."
-        />
-        <div className="mt-12 grid gap-4 md:grid-cols-3">
-          <FeatureCard
-            icon={<Mic className="size-5" />}
-            title="Natural voice in front"
-            description="Low-latency voice sessions with transcript continuity and clear live state."
-          />
-          <FeatureCard
-            icon={<Route className="size-5" />}
-            title="Your agent behind it"
-            description="Route speech into OpenClaw, Hermes, MCP-based agents, or your own OpenAI-compatible service."
-          />
-          <FeatureCard
-            icon={<ShieldCheck className="size-5" />}
-            title="Open source by default"
-            description="Run the relay yourself, inspect the code, and keep provider keys under your control."
-          />
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function WorkflowSection() {
-  return (
-    <section
-      id="work"
-      className="border-b border-[var(--brand-line-strong)] bg-[var(--brand-panel)] px-5 py-20 sm:px-8"
-    >
-      <div className="mx-auto grid max-w-7xl gap-12 lg:grid-cols-[minmax(0,0.9fr)_minmax(360px,1fr)]">
-        <SectionHeading
-          eyebrow="Signal path"
-          title="A calmer way to route live work."
-          description="The product should feel like an instrument panel stripped to essentials. Every surface explains where the signal is, where it is going, and what came back."
-        />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel-strong)] p-5 shadow-[var(--brand-shadow)]">
-            <div className="mb-5 flex items-center justify-between">
-              <p className="font-mono text-xs text-[var(--brand-muted)]">
-                SESSION FIELD
-              </p>
-              <span className="rounded-md bg-[var(--brand-accent-wash)] px-2 py-1 font-mono text-xs text-[var(--brand-accent)]">
-                live
-              </span>
-            </div>
-            <SignalBars />
-            <div className="mt-5 grid grid-cols-3 gap-3 text-sm">
-              <MiniMetric label="Latency" value="182ms" />
-              <MiniMetric label="Mode" value="Bridge" />
-              <MiniMetric label="Scope" value="BYO" />
-            </div>
-          </div>
-          <ol className="grid gap-4">
-            <WorkflowStep
-              number="01"
-              title="Talk"
-              description="A clear mic state tells the user when VoiceClaw is listening."
-            />
-            <WorkflowStep
-              number="02"
-              title="Route"
-              description="VoiceClaw sends the turn to the configured agent endpoint."
-            />
-            <WorkflowStep
-              number="03"
-              title="Read back"
-              description="The reply returns as audio, transcript, and context you can skim."
-            />
-          </ol>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function PlatformSection() {
-  return (
-    <section className="border-b border-[var(--brand-line-strong)] bg-[var(--brand-paper)] px-5 py-20 sm:px-8">
-      <div className="mx-auto max-w-7xl">
-        <SectionHeading
-          eyebrow="Surfaces"
-          title="One brand, native to iPhone and Mac."
-          description="The Mac app is the starting point today. iPhone is available through TestFlight while App Store review finishes."
-        />
-        <div className="mt-12 grid gap-4 lg:grid-cols-2">
-          <SurfaceCard
-            icon={<RadioTower className="size-5" />}
-            title="Mobile"
-            description="Fast voice capture, clean session state, and thumb-reachable controls for iPhone."
-          />
-          <SurfaceCard
-            icon={<TerminalSquare className="size-5" />}
-            title="Desktop"
-            description="A menu-bar companion with compact panels, system theme respect, and visible routing state."
-          />
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function GetStartedSection({
-  macRelease,
-}: {
-  macRelease: MacReleaseDownload | null
-}) {
-  return (
-    <section className="bg-[var(--brand-contrast-bg)] px-5 py-20 text-[var(--brand-contrast-fg)] sm:px-8">
-      <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div>
-          <p className="font-mono text-xs uppercase text-[var(--brand-contrast-muted)]">
-            Get started
-          </p>
-          <h2 className="mt-4 max-w-3xl font-serif text-5xl leading-none sm:text-6xl">
-            Start with the Mac app.
-          </h2>
-          <p className="mt-6 max-w-2xl text-lg leading-8 text-[var(--brand-contrast-muted)]">
-            Download VoiceClaw for macOS, connect your agent endpoint, and start
-            talking. <TestFlightSignupNotice contrast />
-          </p>
-        </div>
-        <div className="flex flex-col justify-end gap-3">
-          <TrackCtaLink
-            ctaLocation="get_started"
-            ctaLabel="Download for Mac"
-            href={MAC_DOWNLOAD_URL}
-            title={downloadTitle(macRelease)}
-            className="inline-flex h-12 items-center justify-center gap-2 rounded-md bg-[var(--brand-contrast-fg)] px-5 text-sm font-semibold text-[var(--brand-contrast-bg)] transition hover:bg-[var(--brand-contrast-fg-hover)]"
-          >
-            <Download className="size-4" />
-            Download for Mac
-          </TrackCtaLink>
-          <MacDownloadVersion release={macRelease} contrast />
-          <a
-            href={REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex h-12 items-center justify-center gap-2 rounded-md border border-[var(--brand-contrast-line)] px-5 text-sm font-semibold text-[var(--brand-contrast-fg)] transition hover:border-[var(--brand-contrast-fg)]"
-          >
-            View source
-            <ArrowRight className="size-4" />
-          </a>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function Footer() {
-  return (
-    <footer className="border-t border-[var(--brand-line-strong)] bg-[var(--brand-paper)] px-5 py-8 sm:px-8">
-      <div className="mx-auto flex max-w-7xl flex-col justify-between gap-5 text-sm text-[var(--brand-muted)] sm:flex-row sm:items-center">
-        <BrandWordmark />
-        <div className="flex gap-5">
-          <a href={DOCS_URL} className="hover:text-[var(--brand-ink)]">
-            Docs
-          </a>
-          <Link href="/brand" className="hover:text-[var(--brand-ink)]">
-            Brand guidelines
-          </Link>
-          <a
-            href={REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-[var(--brand-ink)]"
-          >
-            GitHub
-          </a>
-        </div>
-      </div>
-    </footer>
-  )
-}
-
-function MacDownloadVersion({
-  release,
-  contrast = false,
-}: {
-  release: MacReleaseDownload | null
-  contrast?: boolean
-}) {
-  if (!release) {
-    return (
-      <p
-        className={`mt-3 font-mono text-xs ${
-          contrast
-            ? "text-[var(--brand-contrast-muted)]"
-            : "text-[var(--brand-muted)]"
-        }`}
-      >
-        Resolves to the latest Mac build.
-      </p>
-    )
-  }
-
-  return (
-    <p
-      className={`mt-3 font-mono text-xs ${
-        contrast
-          ? "text-[var(--brand-contrast-muted)]"
-          : "text-[var(--brand-muted)]"
-      }`}
-    >
-      Latest Mac build: {release.tagName} · {formatFileSize(release.size)}
-    </p>
-  )
-}
-
-function FeatureCard({
-  icon,
-  title,
-  description,
-}: {
-  icon: ReactNode
-  title: string
-  description: string
-}) {
-  return (
-    <article className="rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel)] p-6 shadow-[var(--brand-shadow)]">
-      <div className="mb-5 flex size-10 items-center justify-center rounded-md bg-[var(--brand-accent-wash)] text-[var(--brand-accent)]">
-        {icon}
-      </div>
-      <h3 className="text-xl font-semibold text-[var(--brand-ink)]">{title}</h3>
-      <p className="mt-3 text-sm leading-7 text-[var(--brand-muted)]">
-        {description}
-      </p>
-    </article>
-  )
-}
-
-function WorkflowStep({
-  number,
-  title,
-  description,
-}: {
-  number: string
-  title: string
-  description: string
-}) {
-  return (
-    <li className="rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel-strong)] p-5 shadow-[var(--brand-shadow)]">
-      <p className="font-mono text-xs text-[var(--brand-accent)]">
-        {number}
-      </p>
-      <h3 className="mt-3 text-lg font-semibold text-[var(--brand-ink)]">
-        {title}
-      </h3>
-      <p className="mt-2 text-sm leading-7 text-[var(--brand-muted)]">
-        {description}
-      </p>
-    </li>
-  )
-}
-
-function SurfaceCard({
-  icon,
-  title,
-  description,
-}: {
-  icon: ReactNode
-  title: string
-  description: string
-}) {
-  return (
-    <article className="rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel)] p-6 shadow-[var(--brand-shadow)]">
-      <div className="flex items-start gap-4">
-        <div className="flex size-11 shrink-0 items-center justify-center rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel-strong)] text-[var(--brand-ink)]">
-          {icon}
-        </div>
-        <div>
-          <h3 className="text-xl font-semibold text-[var(--brand-ink)]">
-            {title}
-          </h3>
-          <p className="mt-3 text-sm leading-7 text-[var(--brand-muted)]">
-            {description}
-          </p>
-        </div>
-      </div>
-    </article>
-  )
-}
-
-function MiniMetric({
-  label,
-  value,
-}: {
-  label: string
-  value: string
-}) {
-  return (
-    <div className="border-t border-[var(--brand-line)] pt-3">
-      <p className="font-mono text-xs text-[var(--brand-ink)]">
-        {value}
-      </p>
-      <p className="mt-1 text-xs text-[var(--brand-muted)]">{label}</p>
-    </div>
-  )
-}
-
-function TestFlightSignupNotice({ contrast = false }: { contrast?: boolean }) {
-  const linkClassName = contrast
-    ? "font-semibold text-[var(--brand-contrast-fg)] underline decoration-[var(--brand-accent)] underline-offset-4"
-    : "font-semibold text-[var(--brand-ink)] underline decoration-[var(--brand-accent)] underline-offset-4"
-
-  if (!TESTFLIGHT_SIGNUP_URL) {
-    return (
-      <>
-        iPhone is in App Store review, and TestFlight signup is available now.
-      </>
-    )
-  }
-
-  return (
-    <>
-      iPhone is in App Store review, and{" "}
-      <a
-        href={TESTFLIGHT_SIGNUP_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={linkClassName}
-      >
-        TestFlight signup is available now
-      </a>
-      .
-    </>
-  )
-}
-
-function HeroWaveform({ className = "" }: { className?: string }) {
-  return (
-    <div className={`flex items-end gap-2 ${className}`}>
-      {HERO_BARS.map((height, index) => (
-        <span
-          key={`hero-bar-${index}`}
-          className={`block flex-1 rounded-sm ${
-            index === 7 || index === 15
-              ? "bg-[var(--brand-accent)]"
-              : "bg-[var(--brand-contrast-muted)]"
-          }`}
-          style={{ height: `${height}%` }}
-        />
-      ))}
-    </div>
-  )
-}
-
-function HeroMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="border-l border-[var(--brand-contrast-line)] pl-5">
-      <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--brand-contrast-muted)]">
-        {label}
-      </p>
-      <p className="mt-3 text-base text-[var(--brand-contrast-fg)]">{value}</p>
-    </div>
-  )
-}
-
-function TranscriptBubble({
-  speaker,
-  active = false,
-  children,
-}: {
-  speaker: string
-  active?: boolean
-  children: ReactNode
-}) {
-  return (
-    <div
-      className={`rounded-md border px-4 py-3 ${
-        active
-          ? "border-[var(--brand-ink)] bg-[var(--brand-ink)] text-[var(--brand-panel)]"
-          : "border-[var(--brand-line-strong)] bg-[var(--brand-panel-strong)] text-[var(--brand-ink)]"
-      }`}
-    >
-      <p
-        className={`font-mono text-xs uppercase tracking-[0.22em] ${
-          active
-            ? "text-[var(--brand-panel)] opacity-70"
-            : "text-[var(--brand-muted)]"
-        }`}
-      >
-        {speaker}
-      </p>
-      <p className="mt-2 text-sm leading-6">{children}</p>
-    </div>
-  )
-}
-
-function downloadTitle(release: MacReleaseDownload | null) {
-  if (!release) {
-    return "Download latest Mac build"
-  }
-
-  return `Download ${release.tagName} for Mac`
-}
-
-function formatFileSize(size: number) {
-  const megabytes = size / 1024 / 1024
-  return `${Math.round(megabytes)} MB`
 }

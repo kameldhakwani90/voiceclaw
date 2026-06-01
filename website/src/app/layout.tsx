@@ -39,10 +39,10 @@ const themeScript = `
 })()
 `
 
-const SITE_URL = "https://voiceclaw.io"
-const SITE_TITLE = "VoiceClaw - Voice for the Agent You Already Trust"
+const SITE_URL = "https://hello.capnio.pro"
+const SITE_TITLE = "Hello Capnio - Voice for Your Private Agent"
 const SITE_DESCRIPTION =
-  "VoiceClaw is an open source voice layer for your own agent on iPhone and Mac."
+  "Hello Capnio is a public web voice layer that connects your browser to your private OpenClaw-compatible agent."
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -51,7 +51,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     url: SITE_URL,
-    siteName: "VoiceClaw",
+    siteName: "Hello Capnio",
     title: SITE_TITLE,
     description: SITE_DESCRIPTION,
   },
